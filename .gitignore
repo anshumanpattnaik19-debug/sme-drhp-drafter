@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# UI build and dependencies
+ui/node_modules/
+ui/dist/
+ui/tsconfig.tsbuildinfo
+
+# generated package (rebuilt by colab/make_notebook.py)
+colab/*.zip
+
+# issuer files and app state
+workspace/
+
+# training data, teacher output and predictions (large; kept on the laptop and Drive)
+trainset/
