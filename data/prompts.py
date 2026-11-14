@@ -11,6 +11,8 @@ from __future__ import annotations
 import json
 import re
 
+from .clean import strip_page_refs
+
 DRAFT_SYSTEM = (
     "You draft one sub-section of an SME Draft Red Herring Prospectus (SEBI ICDR Regulations, Chapter IX) for review by "
     "the lead manager and legal counsel. Use only the FACTS given; some facts belong to other sub-sections, so use only "
@@ -43,12 +45,12 @@ def _fact_lines(facts):
 
 def drafting_messages(company, section_title, outline, heading, facts, prev_summary="", precedent=None):
     parts = [f"COMPANY: {company}", f"SECTION: {section_title}",
-             "SECTION OUTLINE: " + " | ".join(h for h in outline[:30]),
+             "SECTION OUTLINE: " + " | ".join(strip_page_refs(h)[0] for h in outline[:30]),
              f"SUB-HEADING: {heading}",
-             f"PREVIOUS SUB-SECTION (summary): {prev_summary or '(start of section)'}",
+             f"PREVIOUS SUB-SECTION (summary): {strip_page_refs(prev_summary)[0] or '(start of section)'}",
              f"FACTS: {_fact_lines(facts)}"]
     if precedent:
-        words = precedent.split()
+        words = strip_page_refs(precedent)[0].split()     # another document's page numbers mean nothing here
         parts.append("PRECEDENT (same sub-heading in another company's offer document; for structure and tone only, "
                      "never for figures or names):\n" + " ".join(words[:PRECEDENT_WORDS]))
     parts.append("Draft the sub-section now.")

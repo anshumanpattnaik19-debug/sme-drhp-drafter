@@ -152,6 +152,16 @@ def test_strip_tables_keeps_prose():
     assert strip_tables("Revenue for the years 2023, 2024 and 2025 grew to ₹364.78 lakhs.")[1] == 0
 
 
+
+def test_strip_page_refs_keeps_section_names():
+    from data.clean import strip_page_refs
+    assert strip_page_refs("see “Risk Factors” on page 25 of this Draft Prospectus.") == ("see “Risk Factors”.", 1)
+    out, n = strip_page_refs("Except as disclosed in the section titled “Financial Indebtedness” beginning on page no. 200, "
+                             "we have no borrowings. See “Our Management” on pages 201 and 170 respectively.")
+    assert n == 2 and out == ("Except as disclosed in the section titled “Financial Indebtedness”, we have no borrowings. "
+                              "See “Our Management”.")
+    assert strip_page_refs("This page is intentionally left blank. Survey No. 12 at Rajkot.")[1] == 0
+
 def test_minhash_flags_boilerplate():
     a = " ".join(f"word{i}" for i in range(300))
     b = a + " and a few more words at the end"

@@ -12,6 +12,7 @@ import re
 import time
 
 from data.prompts import drafting_messages, summary_of
+from verify.checks import RE_FIGURE, mask_ungrounded, num_key
 from extract.canonical import current
 from extract.tables import find, tables_from_blocks
 from .builders import Build, Ctx, build, table_block
@@ -233,11 +234,20 @@ def _order(sec, b: Build, narrative):
 
 
 def attach_citations(blocks, facts):
-    """Cite facts whose values appear in a paragraph (model output and builder sentences)."""
-    vals = [(f, str(f["value"]).strip()) for f in facts if len(str(f["value"]).strip()) >= 4 and not f.get("superseded")]
+    """Cite facts whose values appear in a paragraph (model output and builder sentences): verbatim, or for a
+    number by value, so "1440" cites the fact "1,440.00"."""
+    live = [f for f in facts if not f.get("superseded")]
+    vals = [(f, str(f["value"]).strip()) for f in live if len(str(f["value"]).strip()) >= 4]
+    by_num = {}
+    for f in live:
+        k = num_key(f["value"])
+        if k is not None and len(str(f["value"]).replace(",", "").replace(".", "").strip()) >= 3:
+            by_num.setdefault(k, f)
     for b in blocks:
         if b["type"] == "paragraph" and not b.get("facts"):
-            b["facts"] = [f["id"] for f, v in vals if v in b["text"]][:8]
+            ids = [f["id"] for f, v in vals if v in b["text"]]
+            ids += [by_num[k]["id"] for k in (num_key(x) for x in RE_FIGURE.findall(b["text"])) if k in by_num]
+            b["facts"] = list(dict.fromkeys(ids))[:8]
     return blocks
 
 
@@ -266,6 +276,9 @@ def compose(key, ctx: Ctx, llm=None):
             for k, v in (u or {}).items():
                 usage[k] = usage.get(k, 0) + (v if isinstance(v, (int, float)) else 0)
             prose[s] = [blk for blk in parse_markdown(text) if blk["type"] != "heading"]
+            for blk in prose[s]:                      # the model may not state what the inputs do not support
+                if blk["type"] == "paragraph":
+                    blk["text"], blk["masked"] = mask_ungrounded(blk["text"], facts, ctx.offer, f"{ctx.company()} {s}")
             prev = text
         engine = "model"
     elif narrative:

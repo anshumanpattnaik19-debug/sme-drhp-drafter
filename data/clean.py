@@ -5,6 +5,7 @@
     reflow(text) -> paragraphs                 # after segmentation, for the training target
     table_like(text) -> bool                   # units that are mostly a flattened table are skipped
     strip_tables(text) -> (text, n_tables)     # flattened tables inside a drafting target are cut out
+    strip_page_refs(text) -> (text, n_refs)    # "beginning on page 200 of this Draft Red Herring Prospectus" cut out
 """
 from __future__ import annotations
 
@@ -135,3 +136,21 @@ def strip_tables(text, min_run=3, max_gap=6, label_back=8):
         if rest.strip():
             paras.append(rest)
     return "\n\n".join(paras), n
+
+
+_PAGES = r"pages?\s*(?:nos?\.?\s*)?\d+(?:\s*(?:,|and|to|&|-|–)\s*(?:pages?\s*(?:nos?\.?\s*)?)?\d+)*"
+RE_PAGE_REF = re.compile(
+    r"(?:,?\s*(?:beginning|starting|commencing)\s+(?:on|from|at)\s+(?:the\s+)?|\s*\b(?:on|at|from|in)\s+(?:the\s+)?|(?<=[”\"’'])\s*,?\s*)" + _PAGES +
+    r"(?:\s+(?:of|in)\s+(?:this|the)\s+(?:Draft\s+(?:Red\s+Herring\s+)?Prospectus|Red\s+Herring\s+Prospectus|Prospectus"
+    r"|DRHP|Offer\s+Document|document))?(?:,?\s+respectively)?", re.I)
+
+
+def strip_page_refs(text):
+    """Cut page locators out of cross-references: "see “Risk Factors” on page 25 of this Draft Prospectus." becomes
+    "see “Risk Factors”." The section name stays; the page number goes, since no input carries the page layout of the
+    document being drafted and a trained model invents the numbers (21 of 89 run A test drafts, 1 Nov 2026)."""
+    out, n = RE_PAGE_REF.subn("", text)
+    if n:
+        out = re.sub(r"[ \t]+([,.;:])", r"\1", out)
+        out = re.sub(r",(\s*[,.;:])", r"\1", out)
+    return out, n

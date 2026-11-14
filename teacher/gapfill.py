@@ -20,7 +20,7 @@ import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from data.clean import strip_tables  # noqa: E402
+from data.clean import strip_page_refs, strip_tables  # noqa: E402
 from data.facts import RE_DATES, RE_FIG, _num, apply_gates, normalise, parse_dates  # noqa: E402
 from data.pairs import MAX_OWN, MIN_DRAFT_WORDS  # noqa: E402
 from teacher.prompts import gapfill_messages  # noqa: E402
@@ -59,6 +59,7 @@ def select(units, responses):
             skipped["no_response"] += 1
             continue
         target, n_tables = strip_tables(u["target"])           # the same target the rows are built on
+        target = strip_page_refs(target)[0]
         if n_tables and len(re.findall(r"[A-Za-z]{2,}", target)) < MIN_DRAFT_WORDS:
             skipped["table_only"] += 1
             continue

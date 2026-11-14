@@ -20,7 +20,7 @@ from draft.outline import SECTION_BY_KEY
 from draft.router import route
 from rag.index import BM25
 
-from .clean import strip_tables
+from .clean import strip_page_refs, strip_tables
 from .corpus import BUDGET_GROUP, CORE
 from .facts import apply_gates, normalise, precise, _num, parse_dates, _tokens
 from .mask import mask
@@ -135,7 +135,7 @@ def build_rows(sampled, responses, precedents: PrecedentPool, split, seed=13, oc
     resp = {r["unit_id"]: r for r in responses}
     report = {"units": sum(u["skill"] != "context" for u in sampled), "context_units": sum(u["skill"] == "context" for u in sampled), "no_response": 0, "parse_failed": 0, "gate_failed": 0, "gate_fail_reasons": Counter(),
               "rows": Counter(), "router_recall": [], "distractor_share": [], "precision": [], "coverage_figures": [],
-              "coverage_names": [], "dropped": Counter(), "truncated": 0, "facts_in": 0, "tables_stripped": 0, "table_only": 0}
+              "coverage_names": [], "dropped": Counter(), "truncated": 0, "facts_in": 0, "tables_stripped": 0, "page_refs_stripped": 0, "table_only": 0}
     kept_by_unit, gates = {}, {}
     for u in sampled:
         r = resp.get(u["unit_id"])
@@ -147,11 +147,15 @@ def build_rows(sampled, responses, precedents: PrecedentPool, split, seed=13, oc
             continue
         if u["skill"] == "drafting":
             target, n_tables = strip_tables(u["target"])
+            target, n_pages = strip_page_refs(target)
             if n_tables:
                 report["tables_stripped"] += 1
                 if len(re.findall(r"[A-Za-z]{2,}", target)) < MIN_DRAFT_WORDS:
                     report["table_only"] += 1
                     continue
+            if n_pages:
+                report["page_refs_stripped"] += 1
+            if n_tables or n_pages:
                 u = {**u, "target": target}
         facts, _errs = normalise(r["facts"])
         kept, g = apply_gates(facts, u["raw"], u["target"], u["masked_values"])

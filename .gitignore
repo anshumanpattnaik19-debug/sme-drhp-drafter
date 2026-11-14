@@ -15,3 +15,6 @@ workspace/
 
 # training data, teacher output and predictions (large; kept on the laptop and Drive)
 trainset/
+
+# Drive export (runs, adapters, Stage 5 outputs; large, kept on the laptop and Drive)
+drive/

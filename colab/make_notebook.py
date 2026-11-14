@@ -34,6 +34,7 @@ md("""
 | – | laptop | `python -m data.build rows` (gates, router, distractors, precedents, MinHash) | `out/train.jsonl`, `out/test.jsonl` |
 | 3 | L4 | **baselines** B0/B1 on the test rows | `runs/B0`, `runs/B1` |
 | 4 | L4 | **QLoRA runs** A and B (+ ablation 1, seeds) | `runs/<run>/adapter`, `runs/<run>/predictions_test.jsonl` |
+| 5 | L4 | **decoding re-test + DPO against looping** (added 4 Nov 2026) | `runs/A/decode_test/`, `out/dpo_pairs.jsonl`, `runs/A_dpo/adapter` |
 
 Every stage is resumable: rerun a cell after a disconnect and it continues. Check the per-GPU unit rate in the
 Resources panel before the first run, and disconnect the runtime when a stage finishes.
@@ -143,7 +144,9 @@ md("""
 
 Student `Qwen/Qwen2.5-7B-Instruct`, 4-bit QLoRA with Unsloth, loss on the assistant turn only, `max_seq_len` 6,144.
 Runs (PLAN.md 7.7): **A** r16 / lr 2e-4 / all linear layers / 2 epochs; **B** r64 / lr 1e-4; **C** r32 / lr 2e-4 /
-3 epochs / drafting rows twice (added 1 Nov 2026: run A did not beat the base model on drafting); **ablation1** = best
+3 epochs / drafting rows twice (added 1 Nov 2026: run A did not beat the base model on drafting); **A2** = run A on
+`train_nopage.jsonl` / `test_nopage.jsonl`, page numbers cut from cross-references (added 3 Nov 2026: run A loops and
+invents page numbers; built by `python -m data.nopage trainset/out`); **ablation1** = best
 config on `train_no_distractors.jsonl`; **seed2/seed3** = best config with other seeds. Each team member runs one.
 A configuration counts as better only if its **held-out loss** on the test drafts beats the base model's (cell after
 training); run the seed and ablation runs only once a configuration passes.
@@ -162,11 +165,14 @@ RUNS = {
     'A':         dict(r=16, alpha=32, lr=2e-4, epochs=2, data='train.jsonl', seed=3407),
     'B':         dict(r=64, alpha=64, lr=1e-4, epochs=2, data='train.jsonl', seed=3407),
     'C':         dict(r=32, alpha=64, lr=2e-4, epochs=3, data='train.jsonl', seed=3407, draft_weight=2),
+    'A2':        dict(r=16, alpha=32, lr=2e-4, epochs=2, data='train_nopage.jsonl', test='test_nopage.jsonl', seed=3407),
     'ablation1': dict(r=16, alpha=32, lr=2e-4, epochs=2, data='train_no_distractors.jsonl', seed=3407),
     'seed2':     dict(r=16, alpha=32, lr=2e-4, epochs=2, data='train.jsonl', seed=11),
     'seed3':     dict(r=16, alpha=32, lr=2e-4, epochs=2, data='train.jsonl', seed=23),
+    'A_dpo':     dict(r=16, alpha=32, lr=1e-5, epochs=2, data='dpo_pairs.jsonl', seed=3407, method='dpo'),  # stage 5: trained by the DPO cell (22), not cell 15
 }
 RUN = 'A'                       # change per team member
+TEST = RUNS[RUN].get('test', 'test.jsonl')    # the test file cells 16-18 read
 BASE = 'Qwen/Qwen2.5-7B-Instruct'
 MAX_SEQ = 6144
 cfg = RUNS[RUN]
@@ -179,6 +185,9 @@ except Exception:
     report = 'none'
 """)
 code("""
+# CELL 15 - TRAINING (about 75 min on an L4)
+assert 'out_dir' in globals(), 'run stage 0 (cell 3) and the RUNS cell (cell 14) first'
+assert cfg.get('method') != 'dpo', f'{RUN} is trained by the stage 5 DPO cell (22), not here'
 from unsloth import FastLanguageModel
 from unsloth.chat_templates import train_on_responses_only
 from datasets import Dataset
@@ -211,15 +220,20 @@ model.save_pretrained(f'{out_dir}/adapter'); tok.save_pretrained(f'{out_dir}/ada
 json.dump({'run': RUN, **cfg, 'base': BASE, 'log': trainer.state.log_history[-5:]}, open(f'{out_dir}/train_summary.json', 'w'), indent=1)
 """)
 code("""
+# CELL 16 - HELD-OUT LOSS
 # held-out loss on the test rows, adapter on and off: the yes/no measure for a configuration (no generation, so
 # decoding loops cannot distort it). Runs straight after training, or alone: Restart session, stage 0, the RUNS cell,
 # then this cell (it loads runs/<RUN>/adapter). About 5 minutes.
+assert 'out_dir' in globals(), 'run stage 0 (cell 3) and the RUNS cell (cell 14) first'
 import torch
 if 'model' not in globals():
+    assert os.path.isfile(f'{out_dir}/adapter/adapter_config.json'), f'no adapter in {out_dir}: train run {RUN} first (cell 15)'
+    import importlib.util
+    assert importlib.util.find_spec('unsloth'), 'Unsloth not installed on this machine: run cells 4 and 13, Restart session, stage 0, the RUNS cell, then this cell'
     from unsloth import FastLanguageModel
     model, tok = FastLanguageModel.from_pretrained(f'{out_dir}/adapter', max_seq_length=MAX_SEQ, load_in_4bit=True)
 model.eval()
-test = [json.loads(l) for l in open(f'{DRIVE}/out/test.jsonl', encoding='utf-8')]
+test = [json.loads(l) for l in open(f'{DRIVE}/out/{TEST}', encoding='utf-8')]
 
 def nll(r):
     n = len(tok(tok.apply_chat_template(r['messages'][:-1], tokenize=False, add_generation_prompt=True)).input_ids)
@@ -242,9 +256,23 @@ for sk in ('drafting', 'extraction'):
 json.dump(res, open(f'{out_dir}/heldout_loss.json', 'w'), indent=1)
 """)
 code("""
+# CELL 17 - PREDICTIONS (vLLM): the run's main result, after every training run
 # predictions on the test rows (B0 = base model with no adapter; set ADAPTER=None)
 # run in a fresh runtime (Restart session, stage 0, the RUNS cell, then this one): the training model would
 # otherwise still hold the L4's memory when vLLM starts
+assert 'out_dir' in globals(), 'run stage 0 (cell 3) and the RUNS cell (cell 14) first'
+import torch
+assert torch.cuda.is_bf16_supported(), f'{torch.cuda.get_device_name()}: needs an L4 or A100 (a T4 has no bf16 and too little memory)'
+free, total = torch.cuda.mem_get_info()   # whole GPU: vLLM's engine runs in another process, which memory_allocated misses
+assert free > 0.8 * total, f'{(total - free) / 2**30:.1f} GB of the GPU is in use (a model from an earlier cell): Restart session, stage 0, the RUNS cell, then this cell'
+os.environ.setdefault('VLLM_ENGINE_READY_TIMEOUT_S', '3600')   # vLLM loads the 15 GB bf16 weights in a child process: no progress bar, 600 s default
+try:
+    from google.colab import userdata                            # optional HF_TOKEN secret: faster, un-throttled downloads
+    os.environ.setdefault('HF_TOKEN', userdata.get('HF_TOKEN'))
+except Exception:
+    pass
+from huggingface_hub import snapshot_download
+snapshot_download(BASE, allow_patterns=['*.json', '*.safetensors', '*.txt'])   # visible download first; instant once cached
 from vllm import LLM, SamplingParams
 from vllm.lora.request import LoRARequest
 from transformers import AutoTokenizer
@@ -252,18 +280,22 @@ from data.prompts import trim_repeats      # needs the package from 1 Nov 2026 o
 tok = AutoTokenizer.from_pretrained(BASE)
 BASELINE = False                         # True for baseline B0 (base model, no adapter)
 TEMP = 0                                 # drafting only: 0 = greedy; 0.3 = low-temperature sampling (run A loops under greedy)
+FREQ = 0.3                               # drafting only: frequency penalty, chosen by the stage 5 decoding re-test; 0 = off (writes _f03 when on)
+REP = 1.0                                # drafting only: repetition penalty, 1.0 = off (writes _rp110 for 1.1)
 ADAPTER = None if BASELINE else f'{out_dir}/adapter'
 pred_dir = out_dir if ADAPTER else f'{DRIVE}/runs/B0'
-tag = '' if TEMP == 0 else f'_t{TEMP:g}'.replace('.', '')    # 0.3 writes predictions_test_t03.jsonl
+tag = (('' if TEMP == 0 else f'_t{TEMP:g}'.replace('.', '')) + ('' if FREQ == 0 else f'_f{round(FREQ * 10):02d}')
+       + ('' if REP == 1.0 else f'_rp{round(REP * 100)}'))
 os.makedirs(pred_dir, exist_ok=True)
 llm = LLM(BASE, enable_lora=ADAPTER is not None, max_lora_rank=64, max_model_len=MAX_SEQ, gpu_memory_utilization=0.9)
-rows = [json.loads(l) for l in open(f'{DRIVE}/out/test.jsonl', encoding='utf-8')]
+rows = [json.loads(l) for l in open(f'{DRIVE}/out/{TEST}', encoding='utf-8')]
 prompts = [tok.apply_chat_template(r['messages'][:-1], tokenize=False, add_generation_prompt=True) for r in rows]
 # caps from the target lengths (99th percentile: drafting about 2,100 tokens, extraction about 2,350)
 cap = {'drafting': 2200, 'extraction': 3000}
 # extraction stays greedy (values are copied exactly); a fixed seed makes a sampled run repeatable
-params = [SamplingParams(temperature=TEMP, top_p=0.9, seed=1234, max_tokens=cap['drafting'])
-          if TEMP and r['metadata']['skill'] == 'drafting' else
+params = [SamplingParams(temperature=TEMP, top_p=0.9 if TEMP else 1.0, seed=1234, frequency_penalty=FREQ,
+                         repetition_penalty=REP, max_tokens=cap['drafting'])
+          if r['metadata']['skill'] == 'drafting' else
           SamplingParams(temperature=0, max_tokens=cap[r['metadata']['skill']]) for r in rows]
 outs = llm.generate(prompts, params, lora_request=LoRARequest('a', 1, ADAPTER) if ADAPTER else None)
 n_cut = n_cap = 0
@@ -275,6 +307,426 @@ with open(f'{pred_dir}/predictions_test{tag}.jsonl', 'w', encoding='utf-8') as f
         fh.write(json.dumps({'id': r['id'], 'metadata': r['metadata'], 'prediction': pred, 'raw': raw,
                              'finish': finish, 'loop_trimmed': cut}, ensure_ascii=False) + '\\n')
 print(f'predictions_test{tag}.jsonl written: {len(rows)} rows, {n_cap} hit the cap, {n_cut} drafts trimmed at a loop')
+""")
+code(r"""
+# CELL 18 - OPTIONAL 4-bit check, done for run A on 2 Nov 2026. Not part of a normal run: skip it.
+# 4-bit check: do the drafts that looped under vLLM (bf16 base) still loop on the 4-bit base the adapter was
+# trained on? (vLLM 0.32 cannot load bitsandbytes, so this uses Unsloth.) Answers: serving mismatch or training problem.
+# Self-contained, about 10 minutes on an L4. In a fresh runtime: stage 0, then the Unsloth install (cell 13),
+# Runtime > Restart session, stage 0 again, then THIS cell. The RUNS cell is not needed.
+CHECK_4BIT = False                       # set True only to repeat the 4-bit check
+assert CHECK_4BIT, 'cell 18 is the optional 4-bit check and is off: for predictions run cell 17 (PREDICTIONS) instead'
+import os, sys, json, importlib.util
+import torch
+
+CHECK = 'A'          # run whose greedy vLLM predictions are re-checked (run A is the reference case; 'A2' and 'B' also work)
+N = 20               # looped / capped drafts to regenerate
+MAX_SEQ = 6144
+DRIVE = '/content/drive/MyDrive/sme_drhp'
+
+assert os.path.isfile('/content/sme/data/prompts.py'), 'package not unzipped: run stage 0 first'
+if '/content/sme' not in sys.path:
+    sys.path.insert(0, '/content/sme')
+assert importlib.util.find_spec('unsloth'), 'Unsloth not installed: run cell 13, Restart session, stage 0, then this cell'
+free, total = torch.cuda.mem_get_info()   # whole GPU: vLLM's engine runs in another process, which memory_allocated misses
+assert free > 0.8 * total, f'{(total - free) / 2**30:.1f} GB of the GPU is in use (a model from an earlier cell): Restart session, stage 0, then this cell'
+
+run_dir = f'{DRIVE}/runs/{CHECK}'
+test_file = (globals().get('RUNS', {}).get(CHECK, {}).get('test')
+             or {'A2': 'test_nopage.jsonl'}.get(CHECK, 'test.jsonl'))
+vl_path = f'{run_dir}/predictions_test.jsonl'
+assert os.path.isfile(f'{run_dir}/adapter/adapter_config.json'), f'no adapter in {run_dir}/adapter'
+assert os.path.getsize(vl_path) > 0, f'{vl_path} missing or empty: run the vLLM predictions cell for {CHECK} first'
+
+from unsloth import FastLanguageModel          # import before transformers
+from data.prompts import trim_repeats
+
+model, tok = FastLanguageModel.from_pretrained(f'{run_dir}/adapter', max_seq_length=MAX_SEQ, load_in_4bit=True)
+FastLanguageModel.for_inference(model)
+tok.padding_side = 'left'
+stop_ids = [tok.convert_tokens_to_ids(t) for t in ('<|im_end|>', '<|endoftext|>')]
+
+vl = {p['id']: p for p in map(json.loads, open(vl_path, encoding='utf-8'))}
+rows = [r for r in map(json.loads, open(f'{DRIVE}/out/{test_file}', encoding='utf-8'))
+        if r['metadata']['skill'] == 'drafting' and r['id'] in vl
+        and (vl[r['id']]['loop_trimmed'] or vl[r['id']]['finish'] == 'length')][:N]
+assert rows, f'no looped or capped drafts in {vl_path}'
+print(f'run {CHECK} | {test_file} | re-generating {len(rows)} drafts that looped or hit the cap under vLLM')
+
+out_path = f'{run_dir}/predictions_test_q4_hf.jsonl'
+n_cut = n_cap = n_same = 0
+with open(out_path, 'w', encoding='utf-8') as fh:
+    for i in range(0, len(rows), 10):
+        batch = rows[i:i + 10]
+        enc = tok([tok.apply_chat_template(r['messages'][:-1], tokenize=False, add_generation_prompt=True) for r in batch],
+                  return_tensors='pt', padding=True, add_special_tokens=False).to('cuda')
+        with torch.no_grad():
+            gen = model.generate(**enc, max_new_tokens=2200, do_sample=False, use_cache=True,
+                                 eos_token_id=stop_ids, pad_token_id=tok.pad_token_id)
+        for r, g in zip(batch, gen[:, enc.input_ids.shape[1]:].tolist()):
+            finish = 'stop' if set(stop_ids) & set(g) else 'length'
+            raw = tok.decode(g, skip_special_tokens=True)
+            pred, cut = trim_repeats(raw)
+            same = raw.strip()[:300] == vl[r['id']]['raw'].strip()[:300]
+            n_cut += cut; n_cap += finish == 'length'; n_same += same
+            fh.write(json.dumps({'id': r['id'], 'metadata': r['metadata'], 'prediction': pred, 'raw': raw,
+                                 'finish': finish, 'loop_trimmed': cut}, ensure_ascii=False) + '\n')
+            print(f"  {r['id'][:42]:42s} {finish:6s} loop={str(bool(cut)):5s} same_start={same}")
+        fh.flush()
+        print(f'  {min(i + 10, len(rows))}/{len(rows)} done')
+
+n = len(rows)
+still = sum(1 for p in map(json.loads, open(out_path, encoding='utf-8')) if p['finish'] == 'length' or p['loop_trimmed'])
+verdict = ('training-side: the adapter loops on its own 4-bit base too; fix the run (fewer epochs / lower lr / data)'
+           if still >= n / 2 else
+           'serving-side: the loops mostly vanish on the 4-bit base; serve on the base the adapter was trained on')
+summary = {'run': CHECK, 'test': test_file, 'drafts': n, 'hit_cap': n_cap, 'loop_trimmed': n_cut,
+           'still_looping_or_capped': still, 'same_start_as_vllm': n_same, 'verdict': verdict}
+json.dump(summary, open(f'{run_dir}/q4_check.json', 'w'), indent=1)
+print(f'\n4-bit base, {n} drafts that looped on the bf16 base: {n_cap} hit the cap, {n_cut} trimmed at a loop, '
+      f'{n_same} start the same as the vLLM draft\nverdict: {verdict}\nwritten: {out_path}, {run_dir}/q4_check.json')
+""")
+
+md(r"""
+## Stage 5: decoding re-test and DPO against looping (added 4 Nov 2026)
+
+The 4-bit check (cell 18, run 4 Nov) showed the looping is training-side: adapter A loops on the 4-bit base it was
+trained on (11 of 20 drafts hit the cap, 8 loop). Analysis of the predictions: loops are mostly repeated boilerplate
+sentences starting mid-draft, with the same rate for runs A and B and no dependence on fact count, distractors, prompt
+length, precedent or table-like gold: greedy decoding degenerating on high-entropy targets, not a data or
+hyperparameter problem. The `predictions_test_merged*` files are invalid (merging a 4-bit-trained adapter into bf16
+weights broke the model), so penalties were never actually tested.
+
+Order: (1) **decoding re-test** on the unmerged adapter through vLLM's LoRA path, with stop-on-loop (latency) and
+presence / frequency / repetition penalties; (2) **DPO pairs**: adapter A drafts 400 train prompts, looped drafts are
+`rejected`, the gold sub-section `chosen`; (3) **DPO** on top of adapter A with a frozen copy of A as the reference
+(TRL `ref_adapter_name`); (4) rerun the held-out loss, predictions and decoding re-test with `A_dpo`. The label-mask
+check (last cell) confirms `<|im_end|>` was inside the SFT loss. Cells 20-21 need the vLLM runtime (stage 0, cell 4);
+cells 22-23 the Unsloth runtime (stage 0, cell 13, Restart session, stage 0).
+""")
+code(r'''
+# CELL 20 - DECODING RE-TEST (vLLM, about 25 min)
+# Decoding re-test on the UNMERGED adapter (the merged / rp105 prediction files are invalid: merging a 4-bit-trained
+# adapter into bf16 weights broke the model). On the 89 drafting test rows it compares greedy with stop-on-loop against
+# presence, frequency and repetition penalties, all through vLLM's LoRA path. Fresh runtime: stage 0, the vLLM install
+# (cell 4), then this cell. About 25 minutes on an L4. Rerun with CHECK = 'A_dpo' after the DPO cell.
+import os, sys, json, re, time
+import torch
+
+DRIVE = '/content/drive/MyDrive/sme_drhp'
+CHECK = 'A_dpo'                    # adapter under test: 'A', 'B', 'A2' (reads test_nopage.jsonl) or 'A_dpo'
+BASE = 'Qwen/Qwen2.5-7B-Instruct'
+MAX_SEQ, CAP = 6144, 2200
+CONFIGS = {     # name: (sampling kwargs, chunk): chunk = CAP is one shot; a smaller chunk stops at the first loop
+    'greedy_loopstop': (dict(temperature=0), 384),
+    'frequency03':     (dict(temperature=0, frequency_penalty=0.3), CAP),
+    'frequency05':     (dict(temperature=0, frequency_penalty=0.5), CAP),
+}
+
+assert os.path.isfile('/content/sme/data/prompts.py'), 'package not unzipped: run stage 0 first'
+if '/content/sme' not in sys.path:
+    sys.path.insert(0, '/content/sme')
+free, total = torch.cuda.mem_get_info()   # whole GPU: vLLM's engine runs in another process, which memory_allocated misses
+assert free > 0.8 * total, f'{(total - free) / 2**30:.1f} GB of the GPU is in use (a model from an earlier cell): Restart session, stage 0, cell 4, then this cell'
+import os
+os.environ.setdefault('VLLM_ENGINE_READY_TIMEOUT_S', '3600')   # vLLM loads the 15 GB bf16 weights in a child process: no progress bar, 600 s default
+try:
+    from google.colab import userdata                            # optional HF_TOKEN secret: faster, un-throttled downloads
+    os.environ.setdefault('HF_TOKEN', userdata.get('HF_TOKEN'))
+except Exception:
+    pass
+from huggingface_hub import snapshot_download
+snapshot_download(BASE, allow_patterns=['*.json', '*.safetensors', '*.txt'])   # visible download first; instant once cached
+from vllm import LLM, SamplingParams
+from vllm.inputs import TokensPrompt
+from vllm.lora.request import LoRARequest
+from transformers import AutoTokenizer
+from data.prompts import trim_repeats
+
+test_file = 'test_nopage.jsonl' if CHECK == 'A2' else 'test.jsonl'
+adapter = f'{DRIVE}/runs/{CHECK}/adapter'
+assert os.path.isfile(f'{adapter}/adapter_config.json'), f'no adapter at {adapter}'
+out_dir = f'{DRIVE}/runs/{CHECK}/decode_test'
+os.makedirs(out_dir, exist_ok=True)
+tok = AutoTokenizer.from_pretrained(BASE)
+rows = [r for r in map(json.loads, open(f'{DRIVE}/out/{test_file}', encoding='utf-8')) if r['metadata']['skill'] == 'drafting']
+prompt_ids = [tok(tok.apply_chat_template(r['messages'][:-1], tokenize=False, add_generation_prompt=True),
+                  add_special_tokens=False).input_ids for r in rows]
+llm = LLM(BASE, enable_lora=True, max_lora_rank=64, max_model_len=MAX_SEQ, gpu_memory_utilization=0.9)
+lora = LoRARequest('a', 1, adapter)
+
+
+def generate(prompt_ids, kwargs, chunk, cap=CAP):
+    """Rounds of `chunk` tokens per draft; a draft ends at <|im_end|>, at the cap, or (chunk < cap) at the first loop
+    trim_repeats finds, so a loop costs one round instead of the whole cap. Penalties see only the current round."""
+    state = [{'ids': list(p), 'out': [], 'done': None} for p in prompt_ids]
+    while True:
+        live = [i for i, s in enumerate(state) if s['done'] is None]
+        if not live:
+            return state
+        prompts = [TokensPrompt(prompt_token_ids=state[i]['ids'] + state[i]['out']) for i in live]
+        params = [SamplingParams(max_tokens=min(chunk, cap - len(state[i]['out'])), **kwargs) for i in live]
+        outs = llm.generate(prompts, params, lora_request=lora, use_tqdm=False)
+        for i, o in zip(live, outs):
+            s = state[i]
+            s['out'] += list(o.outputs[0].token_ids)
+            _, cut = trim_repeats(tok.decode(s['out'], skip_special_tokens=True))
+            if cut:
+                s['done'] = 'loop'
+            elif o.outputs[0].finish_reason == 'stop':
+                s['done'] = 'stop'
+            elif len(s['out']) >= cap:
+                s['done'] = 'length'
+
+
+NUM = re.compile(r'\d[\d,]*(?:\.\d+)?')
+def nums(t):
+    return {n.replace(',', '').rstrip('.') for n in NUM.findall(t) if len(n.replace(',', '')) >= 2}
+
+def facts_of(user):
+    m = re.search(r'^FACTS: (\[.*?\])\s*$', user, re.M)
+    try:
+        return [str(f['value']) for f in json.loads(m.group(1))]
+    except Exception:
+        return []
+
+summary = {}
+print(f'adapter {CHECK} | {len(rows)} drafting rows | {test_file}')
+print(f"{'config':16s} {'loop%':>6s} {'cap%':>5s} {'len/gold':>8s} {'facts used':>10s} {'unsupported#':>12s} {'s/draft':>8s}")
+for name, (kwargs, chunk) in CONFIGS.items():
+    t0 = time.time()
+    state = generate(prompt_ids, kwargs, chunk)
+    secs = (time.time() - t0) / len(rows)
+    n_loop = n_cap = 0; lr = fu = hal = 0.0
+    with open(f'{out_dir}/{name}.jsonl', 'w', encoding='utf-8') as fh:
+        for r, s in zip(rows, state):
+            raw = tok.decode(s['out'], skip_special_tokens=True)
+            pred, cut = trim_repeats(raw)
+            gold = r['messages'][-1]['content']; user = r['messages'][1]['content']
+            loop = cut or s['done'] == 'loop'; n_loop += loop; n_cap += s['done'] == 'length'
+            lr += len(pred) / max(1, len(gold))
+            vals = facts_of(user); fu += sum(v.lower() in pred.lower() for v in vals) / max(1, len(vals))
+            hal += len(nums(pred) - nums(user) - nums(r['messages'][0]['content']))
+            fh.write(json.dumps({'id': r['id'], 'metadata': r['metadata'], 'prediction': pred, 'raw': raw,
+                                 'finish': s['done'], 'loop_trimmed': bool(loop), 'n_tokens': len(s['out']),
+                                 'config': name}, ensure_ascii=False) + '\n')
+    n = len(rows)
+    summary[name] = dict(loop=n_loop / n, cap=n_cap / n, len_ratio=lr / n, facts_used=fu / n, unsupported_numbers=hal / n,
+                         s_per_draft=secs, sampling=kwargs, chunk=chunk)
+    print(f'{name:16s} {100 * n_loop / n:6.0f} {100 * n_cap / n:5.0f} {lr / n:8.2f} {fu / n:10.2f} {hal / n:12.2f} {secs:8.1f}')
+json.dump(summary, open(f'{out_dir}/summary.json', 'w'), indent=1)
+print(f'\nwritten: {out_dir}/<config>.jsonl and summary.json')
+print('reading: loop% is what matters; len/gold near 1 and unsupported# near the greedy value mean the penalty did not')
+print('wreck the text. greedy_loopstop has the greedy loop rate by construction; its s/draft is the latency saving.')
+''')
+code(r"""
+# CELL 21 - DPO PAIRS (vLLM, about 35 min)
+# DPO pairs: adapter A drafts N_GEN TRAIN prompts (never test rows); each draft that loops or hits the cap becomes the
+# 'rejected' text and the gold sub-section the 'chosen' text. Same runtime as the decoding re-test (vLLM loaded;
+# otherwise: stage 0, cell 4, then this cell). Resumable. About 35 minutes on an L4. Writes out/dpo_pairs.jsonl.
+import os, sys, json, random
+import torch
+
+DRIVE = '/content/drive/MyDrive/sme_drhp'
+SRC = 'A'                     # adapter that generates the rejected drafts (the one DPO will then train)
+N_GEN, SEED = 400, 7
+BASE = 'Qwen/Qwen2.5-7B-Instruct'
+MAX_SEQ, CAP = 6144, 2200
+PAIR_MAX = 4096               # prompt + longer completion, tokens: longer pairs are skipped (L4 memory in the DPO cell)
+REJ_MAX = 1200                # rejected drafts are cut here: enough to carry the loop, bounded for memory
+
+if '/content/sme' not in sys.path:
+    sys.path.insert(0, '/content/sme')
+import os
+os.environ.setdefault('VLLM_ENGINE_READY_TIMEOUT_S', '3600')   # vLLM loads the 15 GB bf16 weights in a child process: no progress bar, 600 s default
+try:
+    from google.colab import userdata                            # optional HF_TOKEN secret: faster, un-throttled downloads
+    os.environ.setdefault('HF_TOKEN', userdata.get('HF_TOKEN'))
+except Exception:
+    pass
+from huggingface_hub import snapshot_download
+snapshot_download(BASE, allow_patterns=['*.json', '*.safetensors', '*.txt'])   # visible download first; instant once cached
+from vllm import LLM, SamplingParams
+from vllm.inputs import TokensPrompt
+from vllm.lora.request import LoRARequest
+from transformers import AutoTokenizer
+from data.prompts import trim_repeats
+
+adapter = f'{DRIVE}/runs/{SRC}/adapter'
+assert os.path.isfile(f'{adapter}/adapter_config.json'), f'no adapter at {adapter}'
+tok = AutoTokenizer.from_pretrained(BASE)
+if 'llm' not in globals():
+    free, total = torch.cuda.mem_get_info()   # whole GPU (FAILURE_LOG 22)
+    assert free > 0.8 * total, f'{(total - free) / 2**30:.1f} GB of the GPU is in use: Restart session, stage 0, cell 4, then this cell'
+    llm = LLM(BASE, enable_lora=True, max_lora_rank=64, max_model_len=MAX_SEQ, gpu_memory_utilization=0.9)
+lora = LoRARequest('src', 2, adapter)
+
+rows = [r for r in map(json.loads, open(f'{DRIVE}/out/train.jsonl', encoding='utf-8')) if r['metadata']['skill'] == 'drafting']
+random.Random(SEED).shuffle(rows)
+rows = rows[:N_GEN]
+gen_path = f'{DRIVE}/work/dpo_gen_{SRC}.jsonl'
+done = {}
+if os.path.exists(gen_path):
+    done = {g['id']: g for g in map(json.loads, open(gen_path, encoding='utf-8'))}
+todo = [r for r in rows if r['id'] not in done]
+print(f'{len(rows)} train drafting prompts | {len(done)} already drafted | {len(todo)} to draft')
+with open(gen_path, 'a', encoding='utf-8') as fh:
+    for i in range(0, len(todo), 50):
+        batch = todo[i:i + 50]
+        prompts = [TokensPrompt(prompt_token_ids=tok(tok.apply_chat_template(r['messages'][:-1], tokenize=False,
+                   add_generation_prompt=True), add_special_tokens=False).input_ids) for r in batch]
+        outs = llm.generate(prompts, SamplingParams(temperature=0, max_tokens=CAP), lora_request=lora, use_tqdm=False)
+        for r, o in zip(batch, outs):
+            ids = list(o.outputs[0].token_ids)
+            raw = tok.decode(ids, skip_special_tokens=True)
+            pred, cut = trim_repeats(raw)
+            g = {'id': r['id'], 'raw': raw, 'rejected': tok.decode(ids[:REJ_MAX], skip_special_tokens=True),
+                 'finish': o.outputs[0].finish_reason, 'loop_trimmed': bool(cut), 'n_tokens': len(ids)}
+            done[r['id']] = g
+            fh.write(json.dumps(g, ensure_ascii=False) + '\n')
+        fh.flush()
+        print(f'  {min(i + 50, len(todo))}/{len(todo)} drafted')
+
+pairs, n_bad, n_long = [], 0, 0
+for r in rows:
+    g = done[r['id']]
+    if not (g['loop_trimmed'] or g['finish'] == 'length'):
+        continue
+    n_bad += 1
+    prompt = r['messages'][:-1]
+    chosen = r['messages'][-1]['content']
+    n_prompt = len(tok(tok.apply_chat_template(prompt, tokenize=False, add_generation_prompt=True), add_special_tokens=False).input_ids)
+    n_comp = max(len(tok(chosen, add_special_tokens=False).input_ids), len(tok(g['rejected'], add_special_tokens=False).input_ids))
+    if n_prompt + n_comp + 8 > PAIR_MAX:
+        n_long += 1
+        continue
+    pairs.append({'id': r['id'], 'prompt': prompt,
+                  'chosen': [{'role': 'assistant', 'content': chosen}],
+                  'rejected': [{'role': 'assistant', 'content': g['rejected']}],
+                  'meta': {'section_bucket': r['metadata']['section_bucket'], 'finish': g['finish'],
+                           'loop_trimmed': g['loop_trimmed'], 'n_tokens': n_prompt + n_comp}})
+out = f'{DRIVE}/out/dpo_pairs.jsonl'
+with open(out, 'w', encoding='utf-8') as fh:
+    for p in pairs:
+        fh.write(json.dumps(p, ensure_ascii=False) + '\n')
+print(f'\n{len(rows)} drafts: {n_bad} looped or hit the cap ({100 * n_bad / len(rows):.0f}%), {n_long} of those too long for '
+      f'{PAIR_MAX} tokens -> {len(pairs)} pairs written to {out}')
+assert len(pairs) >= 60, 'too few pairs for DPO: raise N_GEN'
+""")
+code(r"""
+# CELL 22 - DPO TRAINING (Unsloth, about 1 h)
+# DPO on top of adapter A against looping. Policy = adapter A (trainable); reference = a second, frozen copy of adapter A,
+# so the loss moves the model away from its own looped drafts, not from the base model. Fresh runtime: stage 0, the
+# Unsloth install (cell 13), Runtime > Restart session, stage 0, then this cell. About 1 hour on an L4 for 200 pairs.
+# Then set RUN = 'A_dpo' in the RUNS cell and run the held-out loss cell (16), the predictions cell (17) and the
+# decoding re-test with CHECK = 'A_dpo'.
+import os, sys, json, importlib.util
+import torch
+
+DRIVE = '/content/drive/MyDrive/sme_drhp'
+SRC, RUN = 'A', 'A_dpo'
+BASE = 'Qwen/Qwen2.5-7B-Instruct'
+MAX_SEQ = 6144
+BETA, LR, EPOCHS, GA = 0.1, 1e-5, 2, 8
+PAIR_MAX = 4096
+
+assert importlib.util.find_spec('unsloth'), 'Unsloth not installed: run cell 13, Restart session, stage 0, then this cell'
+free, total = torch.cuda.mem_get_info()   # whole GPU: vLLM's engine runs in another process, which memory_allocated misses
+assert free > 0.8 * total, f'{(total - free) / 2**30:.1f} GB of the GPU is in use (a model from an earlier cell): Restart session, stage 0, then this cell'
+from unsloth import FastLanguageModel
+try:
+    from unsloth import PatchDPOTrainer
+    PatchDPOTrainer()
+except ImportError:
+    pass                                    # newer Unsloth patches DPOTrainer on import
+from trl import DPOTrainer, DPOConfig
+from datasets import Dataset
+
+src = f'{DRIVE}/runs/{SRC}/adapter'
+out_dir = f'{DRIVE}/runs/{RUN}'
+os.makedirs(out_dir, exist_ok=True)
+pairs_path = f'{DRIVE}/out/dpo_pairs.jsonl'
+assert os.path.isfile(pairs_path), f'{pairs_path} missing: run the DPO pairs cell first'
+pairs = [json.loads(l) for l in open(pairs_path, encoding='utf-8')]
+pairs = [p for p in pairs if p['meta']['n_tokens'] <= PAIR_MAX]
+print(f'{len(pairs)} pairs from {pairs_path}')
+
+model, tok = FastLanguageModel.from_pretrained(src, max_seq_length=MAX_SEQ, load_in_4bit=True)
+model.load_adapter(src, adapter_name='reference')            # frozen copy: the DPO reference
+model.set_adapter('default')
+for n, p in model.named_parameters():                        # train the 'default' LoRA only
+    p.requires_grad_('lora_' in n and '.default.' in n)
+n_train = sum(p.numel() for p in model.parameters() if p.requires_grad)
+assert n_train > 0, 'no trainable LoRA parameters found'
+print(f'trainable parameters: {n_train / 1e6:.1f}M (adapter {SRC})')
+FastLanguageModel.for_training(model)
+
+ds = Dataset.from_list([{'prompt': p['prompt'], 'chosen': p['chosen'], 'rejected': p['rejected']} for p in pairs])
+fields = DPOConfig.__dataclass_fields__
+want = dict(output_dir=f'{out_dir}/ckpt', beta=BETA, learning_rate=LR, num_train_epochs=EPOCHS,
+            per_device_train_batch_size=1, gradient_accumulation_steps=GA, lr_scheduler_type='cosine', warmup_steps=3,
+            logging_steps=2, bf16=True, optim='adamw_8bit', seed=3407, save_strategy='no', report_to='none',
+            max_length=PAIR_MAX, max_prompt_length=PAIR_MAX - 256, max_completion_length=PAIR_MAX - 1024,
+            truncation_mode='keep_start', model_adapter_name='default', ref_adapter_name='reference',
+            remove_unused_columns=False, run_name=f'sme-drhp-{RUN}')
+cfg_kw = {k: v for k, v in want.items() if k in fields}
+missing = sorted(set(want) - set(cfg_kw))
+if 'ref_adapter_name' not in cfg_kw:
+    print('WARNING: this TRL has no ref_adapter_name: the reference will be the BASE model, not adapter A')
+if missing:
+    print('DPOConfig fields not in this TRL (skipped):', missing)
+trainer = DPOTrainer(model=model, ref_model=None, args=DPOConfig(**cfg_kw), train_dataset=ds, processing_class=tok)
+stats = trainer.train()
+log = trainer.state.log_history
+acc = [h['rewards/accuracies'] for h in log if 'rewards/accuracies' in h]
+print(f'train loss {stats.training_loss:.3f} | reward accuracy last/first {acc[-1] if acc else float("nan"):.2f} / {acc[0] if acc else float("nan"):.2f}')
+model.save_pretrained(f'{out_dir}/adapter', selected_adapters=['default'])
+tok.save_pretrained(f'{out_dir}/adapter')
+json.dump({'run': RUN, 'from': SRC, 'method': 'dpo', 'beta': BETA, 'lr': LR, 'epochs': EPOCHS, 'pairs': len(pairs),
+           'base': BASE, 'log': log[-5:]}, open(f'{out_dir}/train_summary.json', 'w'), indent=1)
+print(f'saved {out_dir}/adapter')
+""")
+code(r"""
+# CELL 23 - LABEL-MASK CHECK (tokenizer only, 2 min)
+# Label-mask check (2 minutes, tokenizer only, no model): shows exactly which tokens the SFT loss was trained on for one
+# row, the way the training cell masks them. The trained span must be the assistant text and END WITH <|im_end|>;
+# if <|im_end|> is masked out, the model never learned to stop and that alone explains the looping.
+# Needs the Unsloth install (cell 13) and stage 0.
+import sys, json, importlib.util
+assert importlib.util.find_spec('unsloth'), 'Unsloth not installed on this machine: run cell 13, Restart session, stage 0, then this cell'
+if '/content/sme' not in sys.path:
+    sys.path.insert(0, '/content/sme')
+from transformers import AutoTokenizer
+from datasets import Dataset
+
+DRIVE = '/content/drive/MyDrive/sme_drhp'
+BASE = 'Qwen/Qwen2.5-7B-Instruct'
+tok = AutoTokenizer.from_pretrained(BASE)
+row = next(r for r in map(json.loads, open(f'{DRIVE}/out/train.jsonl', encoding='utf-8')) if r['metadata']['skill'] == 'drafting')
+text = tok.apply_chat_template(row['messages'], tokenize=False)
+ds = Dataset.from_list([{'text': text, 'input_ids': tok(text, add_special_tokens=False).input_ids}])
+try:
+    from unsloth_zoo.dataset_utils import train_on_responses_only
+
+    class _T:                                   # the trainer attributes the masker reads
+        pass
+    t = _T(); t.train_dataset = ds; t.eval_dataset = None; t.processing_class = tok; t.tokenizer = tok
+    t = train_on_responses_only(t, instruction_part='<|im_start|>user\n', response_part='<|im_start|>assistant\n')
+    ex = t.train_dataset[0]
+    ids, labels = ex['input_ids'], ex['labels']
+    kept = [i for i, l in enumerate(labels) if l != -100]
+    span = tok.decode([ids[i] for i in kept])
+    print(f'{len(ids)} tokens, {len(kept)} in the loss ({100 * len(kept) / len(ids):.0f}%)')
+    print('trained span starts:', repr(span[:120]))
+    print('trained span ends:  ', repr(span[-80:]))
+    ends_ok = tok.convert_tokens_to_ids('<|im_end|>') in [ids[i] for i in kept[-3:]]
+    print('\nVERDICT:', 'OK: <|im_end|> is trained, the model was taught to stop' if ends_ok else
+          'PROBLEM: <|im_end|> is NOT in the loss: fix the mask before any further SFT')
+except Exception as e:
+    print(f'inconclusive: the masker could not run outside a trainer ({type(e).__name__}: {e})')
+    print('fallback: the template puts the assistant text between these markers; check that the training cell keeps the end:')
+    i = text.rfind('<|im_start|>assistant\n')
+    print(repr(text[i:i + 80]), '...', repr(text[-40:]))
 """)
 
 nb = {"cells": cells, "metadata": {"accelerator": "GPU", "colab": {"provenance": []},
