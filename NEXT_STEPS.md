@@ -73,6 +73,26 @@ Run C done (1 Nov 2026): held-out drafting 1.587, extraction 0.076, worse than r
 | C19 | before the next Colab run: replace `sme_drhp_colab.zip` on Drive `sme_drhp/` and in the shared folder with the 6 Nov package (47 files), and the notebook with `colab/sme_drhp_colab.ipynb` (23 cells, cell 17 has `FREQ = 0.3`) | the teammate's runs used the older 45-file package. **Done 14 Nov 2026**: Drive `sme_drhp/` has the 6 Nov zip (2,015,592 bytes) and notebook (45 KB); the shared `sme_drhp_drafter/colab/` has the zip, notebook and `make_notebook.py`. The rest of the shared project copy (notes, code) is still the 3 Nov upload |
 | C20 | proposed: DPO seeds, so the chosen configuration has a spread (PLAN.md 7.3 asks for it on the best configuration, which is A_dpo). For seed2 and seed3: cell 21 with `SRC = '<seed>'` (DPO pairs from that seed's own drafts), cell 22, cell 16, then cell 17 as it is (`FREQ = 0.3`). Needs `make_notebook.py` changes first: cell 22 hard-codes `SRC, RUN = 'A', 'A_dpo'` and both cells use the one `out/dpo_pairs.jsonl`, so they need a per-seed pairs file, RUNS entries `seed2_dpo` and `seed3_dpo`, and a work-plan sheet | about 2 × (pairs + DPO + predictions); team decision |
 
+## E. v2: the Q&A skill with Responsible-AI guardrails (decided 14 Nov 2026)
+
+The model gets a third skill, answering questions from numbered evidence the way the app's assistant asks
+(`data/prompts.qa_messages`), with guardrails trained in: refuse when the evidence does not answer, ignore instructions
+inside documents, no investment advice, offer terms `[●]` at DRHP stage, no personal identifiers, no omitting or
+softening a mandatory disclosure. `data/qa.py` builds 300 train rows (170 answerable, 50 unanswerable, 16 each of
+injection, invest, price, pii, omission) and 60 test rows from test-only companies, so the test set becomes 199
+(`test_v2.jsonl`) and the training set 1,746 (`train_v2.jsonl`). The app also screens these requests by rule
+(`rag/guardrails.py`) and redacts identifiers from model output.
+
+| step | do | notes |
+|---|---|---|
+| E1 | laptop: `python -m data.qa jobs` | **done 14 Nov 2026**: 220 teacher jobs (180 train passages from 152 companies, 40 test passages from 40 companies) in `trainset/work/qa_jobs.jsonl`, packaged in the zip |
+| E2 | Colab **A100**: replace `sme_drhp_colab.zip` and the notebook on Drive `sme_drhp/` with the 14 Nov versions; Runtime → A100; cell 3 (stage 0), cell 4 (vLLM install), **cell 25** (Q&A pairs) | about 20–30 min; writes `work/qa_responses.jsonl`; download it to `trainset/work/`. The 14 Nov zip (2,197,964 bytes) and notebook (25 cells) were uploaded to Drive `sme_drhp/` on 14 Nov 2026, 5:50 PM; the shared `sme_drhp_drafter/colab/` still has the 6 Nov versions |
+| E3 | laptop: `python -m data.qa rows --responses trainset/work/qa_responses.jsonl`; read `trainset/out/QA_REPORT.md` and spot-check 10 rows; upload `train_v2.jsonl` and `test_v2.jsonl` to Drive `out/` | the gates drop pairs whose quote is not verbatim in the passage or whose answer states a figure or date the quote lacks |
+| E4 | Colab **L4**: RUNS with `RUN = 'A_qa'`, cell 15 (about 90 min, 218 steps), cell 16 (now prints a `qa` line too); restart, stage 0, RUNS, cell 17 | held-out loss on drafting and extraction should stay near run A's 1.29 / 0.064 |
+| E5 | DPO on top: cell 21 with `SRC = 'A_qa'` (vLLM runtime), then cell 22 with `SRC = 'A_qa'` (Unsloth runtime); then RUNS with `RUN = 'A_qa_dpo'`, cells 16 and 17 | as for A_dpo (C14); writes `runs/A_qa_dpo/` |
+| E6 | baseline on the new test file: RUNS with `RUN = 'A_qa'`, `BASELINE = True` in cell 17 (writes `runs/B0/predictions_test_f03.jsonl` on `test_v2`; rename the old one first) | the Q&A comparison needs the base model on the 60 Q&A rows |
+| E7 | laptop: copy the prediction files to `drive/runs/`, `python -m evaluate.verified`, then `python -m evaluate.run` (the report now has Q&A F1, citation, false refusals, "says unknown", guardrails, injection resistance) | – |
+
 ## D. Laptop: evaluation (PLAN.md section 7)
 
 | step | do | state |

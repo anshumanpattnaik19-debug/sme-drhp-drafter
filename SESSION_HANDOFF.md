@@ -71,6 +71,13 @@ gitignored). The older greedy files are in `trainset/preds/` (`predictions_B0_v1
 
 ## Where it stopped
 
+**v2, Q&A skill with Responsible-AI guardrails (14 Nov 2026, NEXT_STEPS part E)**: built on the laptop and tested
+(`data/qa.py`, `teacher/prompts.qa_teacher_messages`, `data/prompts.qa_messages` now also used by `rag/agent.py`,
+`rag/guardrails.py`, Q&A metrics in `evaluate/`, notebook cells 24–25, RUNS `A_qa` / `A_qa_dpo`, DPO cells take
+`SRC`; `tests/test_qa.py`; 60 tests pass). A dry run on the real passages with stand-in teacher answers gave exactly
+300 train / 60 test Q&A rows. Next: E2, the teacher run on a Colab A100 (cell 25), after the new zip and notebook are
+on Drive.
+
 **Evaluation harness built (14 Nov 2026)**: `evaluate/` (metrics, bootstrap by company, template baseline B2, report;
 `tests/test_evaluate.py`, 38 tests pass). Run:
 `python -m evaluate.template` (writes `drive/runs/B2/predictions_test.jsonl`), then
@@ -106,4 +113,4 @@ grounding +0.03 (p = 0.03), distractor leakage −0.11 (p = 0.05), fact use +0.0
 
 * Never mark content as drafted by Claude or an AI in reviewer materials (labels workbook, review files).
 * Keep `FAILURE_LOG.md` current: every failure, its cause and its status.
-* Tests: `python -m pytest -q tests` (52 pass).
+* Tests: `python -m pytest -q tests` (60 pass).

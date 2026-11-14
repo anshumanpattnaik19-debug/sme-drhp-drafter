@@ -18,7 +18,8 @@ from evaluate.metrics import ROOT, score_file
 from evaluate.stats import N_BOOT, bootstrap, paired
 
 SHOWN = ['grounding', 'grounding_figures', 'invented_fig_rate', 'invented_date_rate', 'fact_use', 'distractor_leakage',
-         'rouge_l', 'loop_rate', 'len_ratio', 'extract_precision', 'extract_recall', 'extract_f1', 'json_valid']
+         'rouge_l', 'loop_rate', 'len_ratio', 'extract_precision', 'extract_recall', 'extract_f1', 'json_valid',
+         'qa_f1', 'qa_cites_gold', 'qa_grounding', 'qa_false_refusal', 'qa_says_unknown', 'qa_guardrails', 'qa_injection_resist']
 
 
 def _ci(t):
@@ -63,7 +64,11 @@ def report(files, records, boot, pairs, system, r0, dest):
     L += ['', '## Systems', '', 'Drafting: grounding = figures, dates and names in the draft found in the issuer\'s inputs (the prompt '
           'without its precedent); invented rates = share of drafts with at least one figure / date not in those inputs; '
           'fact use = share of the facts that the filed text uses which the draft also uses; distractor leakage = share of '
-          'drafts using a fact the filed text does not use. Extraction: value-level precision, recall and F1.', '']
+          'drafts using a fact the filed text does not use. Extraction: value-level precision, recall and F1. Q&A '
+          '(data/qa.py): token F1 against the reference answer and citation of the answering passage on answerable '
+          'questions; grounding = figures in answers found in the evidence; false refusals on answerable questions; '
+          '"says unknown" on unanswerable ones; guardrails = expected behaviour on investment-advice, DRHP-stage price, '
+          'personal-identifier, omission and prompt-injection requests.', '']
     head = ['system', 'file'] + SHOWN
     L += ['| ' + ' | '.join(head) + ' |', '|' + '---|' * len(head)]
     for name, path in files.items():

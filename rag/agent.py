@@ -17,10 +17,12 @@ import json
 import re
 import time
 
+from data.prompts import qa_messages
 from draft.outline import SECTION_BY_KEY, SECTIONS
 from draft.router import route
 from draft.writer import fact_text
 from serve import llm
+from .guardrails import LABELS, Redactor, screen
 from .index import best_sentence, tokens
 
 MAX_TOOL_CALLS = 4
@@ -56,14 +58,6 @@ ALIASES = {
     "basis_price": ["basis for offer price", "kpi", "key performance"],
     "summary": ["summary of the offer document"],
 }
-
-ANSWER_SYSTEM = (
-    "You are DRHP Assistant, helping a merchant banker prepare an SME Draft Red Herring Prospectus for {company}. "
-    "Answer only from the EVIDENCE (numbered items from the issuer's files, the current draft and the review pack). "
-    "Cite every figure and claim inline as [n]. If the evidence does not answer the question, say so plainly and name the "
-    "document the issuer should provide. Never invent figures, names or dates. Offer price, price band and offer dates are "
-    "[●] at DRHP stage. No legal or investment advice; flag regulatory points as 'to be confirmed by the BRLM'. "
-    "Be concise: short paragraphs or bullet lists, bold for key figures.")
 
 TOOL_SYSTEM = (
     "You research questions about an SME DRHP project by calling tools. Reply with exactly one JSON object and nothing else.\n"
@@ -207,6 +201,14 @@ class Agent:
             sid += 1
             return {"type": "step", "id": sid, "label": label, "detail": detail, "status": status}
 
+        guard = screen(question)
+        if guard:                                     # rag/guardrails.py: answered the same way with or without a model
+            kind, answer = guard
+            yield step("Guardrail", f"Request about {LABELS[kind]}: answered by policy, not from the documents", "warn")
+            yield {"type": "meta", "engine": "guardrail", "model": None, "retrieval": self.index.method, "sources": []}
+            yield {"type": "delta", "text": answer}
+            yield {"type": "done"}
+            return
         mode, key, steps = self.plan(question)
         yield step("Planning", {"missing": "Checking the review pack for open items", "status": "Reading the review pack",
                                 "risks": "Reading the risk factors and the issuer's files",
@@ -234,10 +236,17 @@ class Agent:
                "retrieval": self.index.method, "sources": [_public(e) for e in self.evidence if e["kind"] not in ("review",)]}
         text = ""
         if model:
+            red = Redactor()                          # personal identifiers never leave the model unmasked
             try:
                 for d in llm.stream_chat(settings, self._answer_messages(question, history)):
-                    text += d
-                    yield {"type": "delta", "text": d}
+                    out = red.feed(d)
+                    text += out
+                    if out:
+                        yield {"type": "delta", "text": out}
+                out = red.flush()
+                text += out
+                if out:
+                    yield {"type": "delta", "text": out}
             except llm.ModelError as e:
                 note = f"_The model did not respond ({str(e)[:100]}). Answering offline instead._\n\n"
                 yield {"type": "delta", "text": note}
@@ -276,11 +285,8 @@ class Agent:
         return "\n".join(_line(e) for e in self.evidence[:limit]) or "(none)"
 
     def _answer_messages(self, question, history):
-        msgs = [{"role": "system", "content": ANSWER_SYSTEM.format(company=self.ctx.company())}]
-        for m in history[-6:]:
-            msgs.append({"role": m["role"], "content": m["content"][:1500]})
-        msgs.append({"role": "user", "content": f"EVIDENCE:\n{self._evidence_text()}\n\nQUESTION: {question}"})
-        return msgs
+        """The format the student is trained on for Q&A (data/prompts.qa_messages)."""
+        return qa_messages(self.ctx.company(), [_line(e) for e in self.evidence[:MAX_EVIDENCE]], question, history)
 
     # ---------- offline answers ----------
 

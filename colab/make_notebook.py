@@ -170,6 +170,9 @@ RUNS = {
     'seed2':     dict(r=16, alpha=32, lr=2e-4, epochs=2, data='train.jsonl', seed=11),
     'seed3':     dict(r=16, alpha=32, lr=2e-4, epochs=2, data='train.jsonl', seed=23),
     'A_dpo':     dict(r=16, alpha=32, lr=1e-5, epochs=2, data='dpo_pairs.jsonl', seed=3407, method='dpo'),  # stage 5: trained by the DPO cell (22), not cell 15
+    # v2 (14 Nov 2026): the Q&A skill with guardrails added (data/qa.py); run A's settings, then DPO as for A_dpo
+    'A_qa':      dict(r=16, alpha=32, lr=2e-4, epochs=2, data='train_v2.jsonl', test='test_v2.jsonl', seed=3407),
+    'A_qa_dpo':  dict(r=16, alpha=32, lr=1e-5, epochs=2, data='dpo_pairs_A_qa.jsonl', test='test_v2.jsonl', seed=3407, method='dpo'),  # cells 21-22 with SRC = 'A_qa'
 }
 RUN = 'A'                       # change per team member
 TEST = RUNS[RUN].get('test', 'test.jsonl')    # the test file cells 16-18 read
@@ -247,7 +250,7 @@ def mean_loss(rows):
     return sum(a for a, _ in s) / sum(b for _, b in s)
 
 res = {}
-for sk in ('drafting', 'extraction'):
+for sk in [s for s in ('drafting', 'extraction', 'qa') if any(r['metadata']['skill'] == s for r in test)]:
     rs = [r for r in test if r['metadata']['skill'] == sk]
     res[sk] = {'adapter': mean_loss(rs)}
     with model.disable_adapter():
@@ -290,9 +293,9 @@ os.makedirs(pred_dir, exist_ok=True)
 llm = LLM(BASE, enable_lora=ADAPTER is not None, max_lora_rank=64, max_model_len=MAX_SEQ, gpu_memory_utilization=0.9)
 rows = [json.loads(l) for l in open(f'{DRIVE}/out/{TEST}', encoding='utf-8')]
 prompts = [tok.apply_chat_template(r['messages'][:-1], tokenize=False, add_generation_prompt=True) for r in rows]
-# caps from the target lengths (99th percentile: drafting about 2,100 tokens, extraction about 2,350)
-cap = {'drafting': 2200, 'extraction': 3000}
-# extraction stays greedy (values are copied exactly); a fixed seed makes a sampled run repeatable
+# caps from the target lengths (99th percentile: drafting about 2,100 tokens, extraction about 2,350; Q&A answers are short)
+cap = {'drafting': 2200, 'extraction': 3000, 'qa': 600}
+# extraction and Q&A stay greedy (values are copied exactly); a fixed seed makes a sampled run repeatable
 params = [SamplingParams(temperature=TEMP, top_p=0.9 if TEMP else 1.0, seed=1234, frequency_penalty=FREQ,
                          repetition_penalty=REP, max_tokens=cap['drafting'])
           if r['metadata']['skill'] == 'drafting' else
@@ -521,14 +524,15 @@ print('wreck the text. greedy_loopstop has the greedy loop rate by construction;
 ''')
 code(r"""
 # CELL 21 - DPO PAIRS (vLLM, about 35 min)
-# DPO pairs: adapter A drafts N_GEN TRAIN prompts (never test rows); each draft that loops or hits the cap becomes the
+# DPO pairs: adapter SRC drafts N_GEN TRAIN prompts (never test rows); each draft that loops or hits the cap becomes the
 # 'rejected' text and the gold sub-section the 'chosen' text. Same runtime as the decoding re-test (vLLM loaded;
-# otherwise: stage 0, cell 4, then this cell). Resumable. About 35 minutes on an L4. Writes out/dpo_pairs.jsonl.
-import os, sys, json, random
+# otherwise: stage 0, cell 4, then this cell). Resumable. About 35 minutes on an L4. Writes out/dpo_pairs.jsonl for
+# SRC = 'A' and out/dpo_pairs_<SRC>.jsonl otherwise; every SRC drafts the same 400 prompts (SEED).
+import os, sys, json, random, zlib
 import torch
 
 DRIVE = '/content/drive/MyDrive/sme_drhp'
-SRC = 'A'                     # adapter that generates the rejected drafts (the one DPO will then train)
+SRC = 'A'                     # adapter that generates the rejected drafts (the one DPO will then train): 'A' or 'A_qa'
 N_GEN, SEED = 400, 7
 BASE = 'Qwen/Qwen2.5-7B-Instruct'
 MAX_SEQ, CAP = 6144, 2200
@@ -559,7 +563,7 @@ if 'llm' not in globals():
     free, total = torch.cuda.mem_get_info()   # whole GPU (FAILURE_LOG 22)
     assert free > 0.8 * total, f'{(total - free) / 2**30:.1f} GB of the GPU is in use: Restart session, stage 0, cell 4, then this cell'
     llm = LLM(BASE, enable_lora=True, max_lora_rank=64, max_model_len=MAX_SEQ, gpu_memory_utilization=0.9)
-lora = LoRARequest('src', 2, adapter)
+lora = LoRARequest(f'src_{SRC}', 2 + zlib.crc32(SRC.encode()) % 10**6, adapter)   # one id per adapter: vLLM caches LoRAs by id
 
 rows = [r for r in map(json.loads, open(f'{DRIVE}/out/train.jsonl', encoding='utf-8')) if r['metadata']['skill'] == 'drafting']
 random.Random(SEED).shuffle(rows)
@@ -605,7 +609,7 @@ for r in rows:
                   'rejected': [{'role': 'assistant', 'content': g['rejected']}],
                   'meta': {'section_bucket': r['metadata']['section_bucket'], 'finish': g['finish'],
                            'loop_trimmed': g['loop_trimmed'], 'n_tokens': n_prompt + n_comp}})
-out = f'{DRIVE}/out/dpo_pairs.jsonl'
+out = f'{DRIVE}/out/dpo_pairs.jsonl' if SRC == 'A' else f'{DRIVE}/out/dpo_pairs_{SRC}.jsonl'
 with open(out, 'w', encoding='utf-8') as fh:
     for p in pairs:
         fh.write(json.dumps(p, ensure_ascii=False) + '\n')
@@ -615,16 +619,17 @@ assert len(pairs) >= 60, 'too few pairs for DPO: raise N_GEN'
 """)
 code(r"""
 # CELL 22 - DPO TRAINING (Unsloth, about 1 h)
-# DPO on top of adapter A against looping. Policy = adapter A (trainable); reference = a second, frozen copy of adapter A,
+# DPO on top of adapter SRC against looping. Policy = adapter SRC (trainable); reference = a second, frozen copy of it,
 # so the loss moves the model away from its own looped drafts, not from the base model. Fresh runtime: stage 0, the
 # Unsloth install (cell 13), Runtime > Restart session, stage 0, then this cell. About 1 hour on an L4 for 200 pairs.
-# Then set RUN = 'A_dpo' in the RUNS cell and run the held-out loss cell (16), the predictions cell (17) and the
-# decoding re-test with CHECK = 'A_dpo'.
+# Writes runs/<SRC>_dpo. Then set RUN = '<SRC>_dpo' in the RUNS cell and run the held-out loss cell (16) and the
+# predictions cell (17).
 import os, sys, json, importlib.util
 import torch
 
 DRIVE = '/content/drive/MyDrive/sme_drhp'
-SRC, RUN = 'A', 'A_dpo'
+SRC = 'A'                     # the SFT run to continue with DPO, as in the DPO pairs cell (21): 'A' or 'A_qa'
+RUN = f'{SRC}_dpo'
 BASE = 'Qwen/Qwen2.5-7B-Instruct'
 MAX_SEQ = 6144
 BETA, LR, EPOCHS, GA = 0.1, 1e-5, 2, 8
@@ -645,8 +650,8 @@ from datasets import Dataset
 src = f'{DRIVE}/runs/{SRC}/adapter'
 out_dir = f'{DRIVE}/runs/{RUN}'
 os.makedirs(out_dir, exist_ok=True)
-pairs_path = f'{DRIVE}/out/dpo_pairs.jsonl'
-assert os.path.isfile(pairs_path), f'{pairs_path} missing: run the DPO pairs cell first'
+pairs_path = f'{DRIVE}/out/dpo_pairs.jsonl' if SRC == 'A' else f'{DRIVE}/out/dpo_pairs_{SRC}.jsonl'
+assert os.path.isfile(pairs_path), f'{pairs_path} missing: run the DPO pairs cell (21) with SRC = {SRC!r} first'
 pairs = [json.loads(l) for l in open(pairs_path, encoding='utf-8')]
 pairs = [p for p in pairs if p['meta']['n_tokens'] <= PAIR_MAX]
 print(f'{len(pairs)} pairs from {pairs_path}')
@@ -729,6 +734,19 @@ except Exception as e:
     print(repr(text[i:i + 80]), '...', repr(text[-40:]))
 """)
 
+md("""
+## Stage 2c: Q&A pairs for the third skill (A100, 220 calls, about 20-30 minutes; added 14 Nov 2026)
+
+Placed last so the cell numbers above stay as they were. The teacher writes 2 question-answer pairs per passage for
+question answering with Responsible-AI guardrails (`trainset/work/qa_jobs.jsonl`, made on the laptop with
+`python -m data.qa jobs`: 180 train-split and 40 test-split passages). A100 runtime: stage 0 (cell 3), the vLLM
+install (cell 4), then cell 25. Resumable like stage 2. Then, on the laptop:
+`python -m data.qa rows --responses trainset/work/qa_responses.jsonl` builds `out/train_v2.jsonl` and
+`out/test_v2.jsonl`; upload both to Drive `out/` and train run `A_qa` (cells 14-17), then DPO with `SRC = 'A_qa'`
+(cells 21-22) and cells 16-17 with `RUN = 'A_qa_dpo'`.
+""")
+code("# CELL 25 - Q&A PAIRS (teacher, A100)\n" + TEACHER_CELL.format(jobs="qa_jobs.jsonl", out="qa_responses.jsonl"))
+
 nb = {"cells": cells, "metadata": {"accelerator": "GPU", "colab": {"provenance": []},
                                    "kernelspec": {"display_name": "Python 3", "name": "python3"}},
       "nbformat": 4, "nbformat_minor": 0}
@@ -744,9 +762,10 @@ def package(path):
                 for f in files:
                     if f.endswith(".py"):
                         full = os.path.join(base, f)
-                        z.write(full, os.path.relpath(full, ROOT))
+                        z.write(full, os.path.relpath(full, ROOT).replace(os.sep, "/"))   # forward slashes (FAILURE_LOG 28)
         for rel in ("trainset/screen/screen_jobs.jsonl", "trainset/screen/screen_units.jsonl", "trainset/work/teacher_jobs.jsonl",
-                    "trainset/work/gapfill_jobs.jsonl", "trainset/work/common_words.json", "trainset/screen/reviewer_labels.json"):
+                    "trainset/work/gapfill_jobs.jsonl", "trainset/work/qa_jobs.jsonl", "trainset/work/common_words.json",
+                    "trainset/screen/reviewer_labels.json"):
             full = os.path.join(ROOT, rel)
             if os.path.isfile(full):
                 z.write(full, rel)

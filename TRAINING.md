@@ -195,6 +195,17 @@ chunks/*.parquet ─► units ─► sample ─► teacher (Colab) ─► rows (
 * **Token counts are estimated** (1.3 tokens per word). The longest dry-run row is about 1,600 of the 6,144 limit;
   check with the Qwen tokenizer on Colab before training.
 
+* **v2: a third skill, question answering with guardrails** (decided 14 Nov 2026; NEXT_STEPS part E). The brief's
+  Track A is a domain-adapted *assistant*, and the app's assistant was answering with a model never trained for it.
+  Rows use the assistant's own prompt (`data/prompts.qa_messages`: numbered EVIDENCE of 5 passages from the same
+  company, then the QUESTION). Answerable rows come from teacher pairs gated on a verbatim quote that carries every
+  figure and date of the answer; the answering passage sits among 4 distractors with none of the answer's figures,
+  and every sentence of the target cites it as [n]. Unanswerable rows drop that passage and name the document to
+  request. Guardrail rows (templated, several wordings each): an injected instruction in a distractor passage (answer,
+  and say it was ignored), investment advice, DRHP-stage offer terms ([●]), personal identifiers, and omitting or
+  softening a disclosure. 300 train and 60 test rows; test companies are only in the test split. Earlier runs (A to
+  A_dpo, seeds, ablation) stay as the v1 results; v2 is run A's settings on `train_v2.jsonl` (`A_qa`), then DPO.
+
 ## Known limits
 
 * Headings are found by layout heuristics; a few table headers and names in tables still pass. They only affect the

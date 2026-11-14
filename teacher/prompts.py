@@ -19,6 +19,30 @@ Rules:
 7. One fact per value. Do not add facts that are not in the passage."""
 
 
+QA_TEACHER_SYSTEM = """You write question-answer pairs for training an assistant that helps a merchant banker prepare an
+Indian SME Draft Red Herring Prospectus. Each pair is answered from ONE passage of a company's offer document.
+Return JSON only, no prose and no code fences:
+{"qa": [{"question": "...", "answer": "...", "quote": "...", "topic": "...", "source_doc": "..."}]}
+
+Write exactly 2 pairs. Rules:
+1. question: what a banker, analyst or lawyer preparing the DRHP would ask about this company, 6-30 words, answerable
+   only from this passage (not general knowledge, not yes/no, not about page numbers or section numbers).
+2. answer: 1-3 sentences in the formal style of an offer document, answering the question fully. Copy every figure,
+   date and name exactly as the passage writes it. Add nothing the passage does not say.
+3. quote: the shortest exact span of the passage (copied character for character, at most 300 characters) that
+   contains everything the answer states.
+4. topic: the thing asked about, as a noun phrase, e.g. "the revenue from operations for FY 2024-25".
+5. source_doc: the issuer document a banker would ask for to verify the answer, e.g. "restated financial
+   statements", "board resolution", "certificate from the statutory auditor", "lease deed", "litigation certificate".
+6. The two pairs must ask about different facts."""
+
+
+def qa_teacher_messages(unit, max_chars=3000):
+    return [{"role": "system", "content": QA_TEACHER_SYSTEM},
+            {"role": "user", "content": f"COMPANY: {unit['company']}\nSECTION: {unit['section_title']}\n"
+                                        f"SUB-HEADING: {unit['heading']}\n\nPASSAGE:\n{unit['raw'][:max_chars]}"}]
+
+
 def teacher_messages(unit):
     return [{"role": "system", "content": TEACHER_SYSTEM},
             {"role": "user", "content": f"SECTION: {unit['section_title']}\nSUB-HEADING: {unit['heading']}\n\nPASSAGE:\n{unit['raw']}"}]

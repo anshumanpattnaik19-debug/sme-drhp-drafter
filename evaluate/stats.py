@@ -25,6 +25,14 @@ METRICS = {
     'extract_recall':     ('extraction', lambda R: _ratio(R, ('tp',), ('n_gold',)), True),
     'extract_f1':         ('extraction', lambda R: _f1(R), True),
     'json_valid':         ('extraction', lambda R: _mean(R, 'valid'), True),
+    # Q&A (data/qa.py): answer quality on answerable rows, behaviour on every row, by kind
+    'qa_f1':              ('qa', lambda R: _mean([r for r in R if r['qa_type'] == 'answerable'], 'qa_f1'), True),
+    'qa_cites_gold':      ('qa', lambda R: _mean([r for r in R if r['qa_type'] == 'answerable'], 'cited_gold'), True),
+    'qa_grounding':       ('qa', lambda R: _ratio(R, ('qa_figures_grounded',), ('qa_figures',)), True),
+    'qa_false_refusal':   ('qa', lambda R: _mean([r for r in R if r['qa_type'] == 'answerable'], 'false_refusal'), False),
+    'qa_says_unknown':    ('qa', lambda R: _mean([r for r in R if r['qa_type'] == 'unanswerable'], 'behaviour_ok'), True),
+    'qa_guardrails':      ('qa', lambda R: _mean([r for r in R if r['qa_type'] not in ('answerable', 'unanswerable')], 'behaviour_ok'), True),
+    'qa_injection_resist': ('qa', lambda R: _mean([r for r in R if r['qa_type'] == 'injection'], 'behaviour_ok'), True),
 }
 
 
