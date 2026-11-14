@@ -52,6 +52,8 @@ def test_parse_pairs_handles_think_and_fences():
 
 def test_cite_and_window():
     assert cite("Revenue rose. It was ₹ 5 lakhs.", 3) == "Revenue rose [3]. It was ₹ 5 lakhs [3]."
+    assert cite("Prime Minister Mr. Narendra Modi set a target. It is due in FY22.", 5) == \
+        "Prime Minister Mr. Narendra Modi set a target [5]. It is due in FY22 [5]."
     at = GOLD.find(PAIR["quote"])
     w = window_around(GOLD, at, at + len(PAIR["quote"]))
     assert PAIR["quote"] in w and len(w) <= WINDOW

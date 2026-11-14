@@ -18,3 +18,6 @@ trainset/
 
 # Drive export (runs, adapters, Stage 5 outputs; large, kept on the laptop and Drive)
 drive/
+
+# passage corpora for RAG evaluation (large; rebuilt from trainset/work)
+rag/corpus_*.jsonl

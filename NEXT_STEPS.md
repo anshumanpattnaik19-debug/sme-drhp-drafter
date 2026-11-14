@@ -86,7 +86,7 @@ injection, invest, price, pii, omission) and 60 test rows from test-only compani
 | step | do | notes |
 |---|---|---|
 | E1 | laptop: `python -m data.qa jobs` | **done 14 Nov 2026**: 220 teacher jobs (180 train passages from 152 companies, 40 test passages from 40 companies) in `trainset/work/qa_jobs.jsonl`, packaged in the zip |
-| E2 | Colab **A100**: replace `sme_drhp_colab.zip` and the notebook on Drive `sme_drhp/` with the 14 Nov versions; Runtime → A100; cell 3 (stage 0), cell 4 (vLLM install), **cell 25** (Q&A pairs) | about 20–30 min; writes `work/qa_responses.jsonl`; download it to `trainset/work/`. The 14 Nov zip (2,197,964 bytes) and notebook (25 cells) were uploaded to Drive `sme_drhp/` on 14 Nov 2026, 5:50 PM; the shared `sme_drhp_drafter/colab/` still has the 6 Nov versions |
+| E2 | Colab **A100**: replace `sme_drhp_colab.zip` and the notebook on Drive `sme_drhp/` with the 14 Nov versions; Runtime → A100; cell 3 (stage 0), cell 4 (vLLM install), **cell 25** (Q&A pairs) | about 20–30 min; writes `work/qa_responses.jsonl`; download it to `trainset/work/`. The 14 Nov zip (2,197,964 bytes) and notebook (25 cells) were uploaded to Drive `sme_drhp/` on 14 Nov 2026, 5:50 PM; the shared `sme_drhp_drafter/colab/` got them at 5:56 PM. First attempt, 14 Nov about 6 PM: no A100 free, Colab gave an L4, which cannot hold the teacher (FAILURE_LOG 29); retry, and set the runtime type back to A100 (Colab switched the notebook to L4). **Moved to the course VM the same evening** (second Colab attempt also fell back to an L4): `vm/setup_teacher.sh` (vLLM 0.10.0+cu126 in `~/venv-teacher`, Qwen3-32B-AWQ in `~/models`, on the login node) and `vm/qa_teacher.sbatch` (one Slurm job, writes `~/sme/out/qa_responses.jsonl`) |
 | E3 | laptop: `python -m data.qa rows --responses trainset/work/qa_responses.jsonl`; read `trainset/out/QA_REPORT.md` and spot-check 10 rows; upload `train_v2.jsonl` and `test_v2.jsonl` to Drive `out/` | the gates drop pairs whose quote is not verbatim in the passage or whose answer states a figure or date the quote lacks |
 | E4 | Colab **L4**: RUNS with `RUN = 'A_qa'`, cell 15 (about 90 min, 218 steps), cell 16 (now prints a `qa` line too); restart, stage 0, RUNS, cell 17 | held-out loss on drafting and extraction should stay near run A's 1.29 / 0.064 |
 | E5 | DPO on top: cell 21 with `SRC = 'A_qa'` (vLLM runtime), then cell 22 with `SRC = 'A_qa'` (Unsloth runtime); then RUNS with `RUN = 'A_qa_dpo'`, cells 16 and 17 | as for A_dpo (C14); writes `runs/A_qa_dpo/` |
@@ -112,3 +112,29 @@ companies was considered on 14 Nov 2026 and dropped.
 - Stages 3–4 have never run: Unsloth, TRL and vLLM 0.32 have not been installed together on this image, and the
   Pillow pin is untested. Paste the first error if one appears; it goes in `FAILURE_LOG.md`.
 - B1 (2-shot baseline) and B3 (teacher 2-shot) have no notebook cell yet; the evaluation harness (Week 1) is not built.
+
+## E-status (15 Nov 2026, course VM)
+
+| step | state |
+|---|---|
+| E2 teacher run (220 jobs) | done 14 Nov, 40 min GPU, 0 failures (`~/sme/out/qa_responses.jsonl`, copied to `trainset/work/`) |
+| E3 rows (300 train, 60 test) and spot-check | done; citation-in-name bug fixed (`data/qa.py` `cite`) |
+| E4 train A_qa (`vm/train_qa.py`, 1,746 rows, run A settings) | done, 52 min, 219 steps, loss 1.28 → 0.35; adapter `~/checkpoints/A_qa-51/adapter` |
+| E5 predictions, base vs A_qa (`vm/predict_qa.py`) | done; `drive/runs/A_qa/` |
+| E5b DPO on A_qa (`vm/dpo_all.sbatch`: 223 pairs, 56 steps, 23 min; reward accuracy 0.98, loss to 0.0003) | done; `drive/runs/A_qa/predictions_A_qa_dpo.jsonl` |
+
+Scores on the 199 test rows (greedy, drafting with frequency 0.3):
+
+| | base | A_qa | A_qa_dpo |
+|---|---|---|---|
+| drafting loops | 0.011 | 0.303 | 0.191 |
+| drafting invented figures | 0.191 | 0.281 | 0.326 |
+| fact use | 0.505 | 0.588 | 0.674 |
+| extraction precision / recall | 0.459 / 0.289 | 0.647 / 0.394 | 0.671 / 0.430 |
+| Q&A F1 (answerable) | 0.695 | 0.877 | 0.870 |
+| Q&A cites the answering passage | 0.382 | 1.000 | 1.000 |
+| Q&A says unknown (unanswerable) | 0.000 | 0.900 | 0.900 |
+| Q&A guardrails | 0.375 | 1.000 | 1.000 |
+| prompt injection resisted | 1.000 | 1.000 | 1.000 |
+
+Not done (blocked or outside this session): B1/B3 baselines and R0/F2 with RAG (need a serving path for the RAG app on the VM); LLM judge (gpt-oss-20b needs about 13 GB, and the VM disk is at 26.5 of its 32 GiB soft quota); checklist coverage (H3) and blind comparison (H4) need the reviewer; issuer bundles 2–5 (H5); merge, AWQ export, FastAPI and Docker (Docker cannot be built on the VM); model card, red-team log, report and demo.

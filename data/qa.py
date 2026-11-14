@@ -171,9 +171,13 @@ def gate(pair, passage):
 
 # ---------- rows ----------
 
+RE_SENT_BREAK = re.compile(r"(?<!\bMr\.)(?<!\bMrs\.)(?<!\bMs\.)(?<!\bDr\.)(?<!\bShri\.)(?<!\bSmt\.)(?<!\bNo\.)(?<!\bCo\.)"
+                           r"(?<=[.!?])\s+")
+
+
 def cite(answer, n):
-    """Cite every sentence of the answer with [n]."""
-    parts = re.split(r"(?<=[.!?])\s+", answer.strip())
+    """Cite every sentence of the answer with [n]; a full stop after an honorific (Mr., Smt., No.) does not end one."""
+    parts = RE_SENT_BREAK.split(answer.strip())
     out = []
     for p in parts:
         p = p.strip()
