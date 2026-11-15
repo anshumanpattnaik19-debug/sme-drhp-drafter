@@ -114,7 +114,17 @@ def _ocr_image_bytes(data: bytes) -> str | None:
         last_y = y
     if cur:
         lines.append(" ".join(cur))
-    return "\n".join(lines)
+    return _space_dates("\n".join(lines))
+
+
+RE_COMPACT_DATE = re.compile(
+    r"\b(\d{1,2})(st|nd|rd|th)?\s*(January|February|March|April|May|June|July|August|September|October|November|"
+    r"December)\s*((?:19|20)\d{2})\b", re.I)
+
+
+def _space_dates(text: str) -> str:
+    """OCR often drops the spaces in a date ("21September2023"). Put them back, so the date and its label read as text."""
+    return RE_COMPACT_DATE.sub(lambda m: f"{m.group(1)}{m.group(2) or ''} {m.group(3)} {m.group(4)}", text)
 
 
 PAGE_NUMBER_RE = re.compile(r"^(page\s+)?\d{1,4}(\s+of\s+\d{1,4})?$", re.I)

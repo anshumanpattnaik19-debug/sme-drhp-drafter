@@ -131,6 +131,26 @@ total and no year allocation ("- - 520"), and "Total deployment 1,860.00 + 520.0
 change to the drafting prompt or training. Bundle page count (118 pages) and distinct financial profiles: kept as they
 are at your request.
 
+## 8. Job 73: check run after the table and date changes
+
+Run: VM job 73 (`vm/h5.sbatch`, base + LoRA adapter, as job 71). Same model, with the parser now turning plain-text
+rows into tables and OCR dates spaced (draft/writer.py, ingest/readers.py). Outputs in `build/h5_job73/`. Five bundles,
+0 job errors.
+
+**Grounding: 0 ungrounded values in all five bundles** (same as job 71).
+
+**Loops:** worst repeated sentence x7 (rule-written risk factors). `loop_trimmed` fires in 4 to 6 sub-headings per
+bundle.
+
+**Tables:** 51 to 95 table blocks per bundle, including the builder's own tables and the converted plain-text rows.
+
+**Reconciliation:** the QC check now reads only tables converted from plain-text rows (flagged `converted`). The
+drafts of job 73 were written before that flag existed, so the check cannot evaluate them: it reports 0 only because it
+has nothing to read. Checked on the next run.
+
+**Objects prose (not changed by the parser):** the draft text still has the wrong figures against the source workbook
+(`02_Objects_Project_Cost.xlsx`: FY 2026-27 is 1,644, FY 2027-28 is 2,586). The QC flags them; a reviewer corrects them.
+
 ## 4. How to reproduce
 
 ```bash

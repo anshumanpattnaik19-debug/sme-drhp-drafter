@@ -199,7 +199,41 @@ def parse_markdown(text):
             blocks.append({"type": "table", "rows": rows, "text": "", "facts": []})
         else:
             blocks.append({"type": "paragraph", "text": chunk, "facts": []})
-    return _join_split_sentences(blocks)
+    return _rows_to_tables(_join_split_sentences(blocks))
+
+
+VALUE = r"(?:-|\[●\]|[\d,]+(?:\.\d+)?)"
+RE_TABLE_ROW = re.compile(rf"^(?P<label>.*?[A-Za-z\)\]].*?)\s+(?P<vals>{VALUE}(?:\s+{VALUE})*)\s*\*?$")
+
+
+def _rows_to_tables(blocks):
+    """The model sometimes writes a table as plain lines: "Label 1,244.00 616.00 1,860.00", one line per row, with a
+    blank line between the rows. A run of two or more such paragraphs with the same number of values becomes a table
+    (label, then the values). The header line above the run stays as text: its column names are not guessed."""
+    out, i = [], 0
+    while i < len(blocks):
+        j = i
+        vals = None
+        while j < len(blocks) and blocks[j]["type"] == "paragraph":
+            m = RE_TABLE_ROW.match(blocks[j]["text"].strip())
+            if not m:
+                break
+            n = len(m["vals"].split())
+            if n < 2 or (vals is not None and n != vals):      # one trailing number is a sentence, not a row
+                break
+            vals = n
+            j += 1
+        if j - i >= 2:
+            rows = []
+            for b in blocks[i:j]:
+                m = RE_TABLE_ROW.match(b["text"].strip())
+                rows.append([m["label"].strip()] + m["vals"].split())
+            out.append({"type": "table", "rows": rows, "text": "", "facts": [], "converted": True})
+            i = j
+        else:
+            out.append(blocks[i])
+            i += 1
+    return out
 
 
 RE_OPEN_END = re.compile(r"(,|\bno\.|\bpages?|\bon|\bdated|\bof|\bto|\bfor|\band)$", re.I)

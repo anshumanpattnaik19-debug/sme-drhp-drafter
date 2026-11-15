@@ -68,6 +68,27 @@ def test_a_page_reference_split_by_a_blank_line_is_masked():
     assert "page no. 99" not in masked and "page no. [●]" in masked and hits
 
 
+def test_plain_text_rows_with_a_blank_line_between_them_become_a_table():
+    from draft.writer import parse_markdown
+
+    text = ("1. Purchase and installation of plant and machinery 1,244.00 616.00 1,860.00\n\n"
+            "2. Installation of a 1.20 MWp rooftop solar power plant - - 520.00\n\n"
+            "Total - - 4,230.00")
+    blocks = parse_markdown(text)
+    assert blocks[0]["type"] == "table"
+    assert blocks[0]["rows"][0] == ["1. Purchase and installation of plant and machinery", "1,244.00", "616.00", "1,860.00"]
+    assert blocks[0]["rows"][1][1:] == ["-", "-", "520.00"]
+    assert len(blocks) == 1 and len(blocks[0]["rows"]) == 3          # the total line is a row of the same table
+    assert blocks[0]["rows"][2] == ["Total", "-", "-", "4,230.00"]
+
+
+def test_a_sentence_ending_in_a_year_is_not_a_table():
+    from draft.writer import parse_markdown
+
+    text = "The Company was formed under the law in force as of 2010\n\nIt was registered again in 2012"
+    assert [b["type"] for b in parse_markdown(text)] == ["paragraph", "paragraph"]
+
+
 def test_write_section_trims_a_looping_draft_and_reports_it():
     from draft.builders import Ctx
     from draft.writer import DRAFT_FREQUENCY_PENALTY, write_section

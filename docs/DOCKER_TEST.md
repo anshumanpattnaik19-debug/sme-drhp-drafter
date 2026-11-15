@@ -1,0 +1,35 @@
+# Docker test of the app
+
+Run: 15 Nov 2026, laptop with Docker Desktop 29.9.3.
+
+## What was built and run
+
+- Image: `docker build -f docker/Dockerfile.app -t drhp-studio .` (built from the current code, after the table, date
+  and OCR changes of this round).
+- Container: `docker run -d --name drhp-smoke -p 8765:8765 drhp-studio`.
+- Smoke test: `python vm/docker_smoke.py http://127.0.0.1:8765 offline bundles/out/kestrel_flexipak`, which goes through
+  the app's own API: health, settings, a new project, six issuer files uploaded (two Word, three Excel, one scanned JPG),
+  processing, and one drafted section (`summary`).
+
+## Result
+
+| Step | Result |
+|---|---|
+| Health | `status ok`, OCR available |
+| Upload and processing | 6 files, processed, 739 facts |
+| Drafting (offline drafter, no model server) | `summary` drafted: engine `brief`, 10 blocks |
+
+The OCR of the scanned JPG ran inside the container with RapidOCR (offline), so the image has its OCR models.
+
+## What was not tested, and why
+
+**The drafting model inside the container was not tested.** The course VM's SSH server refuses port forwarding for
+this account ("administratively prohibited"), so the laptop could not reach the vLLM server on the VM. This is a
+server policy, not a fault in the app, and it was not worked around. The model path was tested on the VM through the
+app's own source run (H5, see `docs/H5_RESULTS.md`), which uses the same API.
+
+**The compose file's vLLM service was not run.** It needs an NVIDIA GPU on the same Docker host, and the laptop has
+none. `docker compose config` is valid.
+
+To test the model in Docker, run the container on a GPU host, or on a host whose model server the laptop can reach
+directly, and point the Settings at it.

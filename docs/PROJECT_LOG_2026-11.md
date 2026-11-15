@@ -246,6 +246,10 @@ test is recorded in `docs/OCR_EVAL.md`: the base vision model has 12.8% characte
 against 55.8% for the offline RapidOCR, so no fine-tuning is needed yet. Also done: the verifier checks fiscal years,
 OCR dates without spaces are read, a split sentence is one paragraph, the QC checks that deployment rows add up.
 
+Later in the same round: plain-text rows that the model wrote as lines become tables (10 runs, 26 rows across the five
+bundles); OCR dates have their spaces back; the Docker image builds and passes an upload, processing and drafting smoke
+test with the offline drafter (`docs/DOCKER_TEST.md`); the H5 check run (job 73) keeps zero ungrounded values.
+
 Open items, updated:
 1. **Vision model**: Qwen2.5-VL-7B-Instruct is on the VM (16 GB). Its error rates are in `docs/OCR_EVAL.md`.
 2. **GitHub**: the remote is configured (`origin`, branch `eval-harness-verifier`). See the commit for the push status.

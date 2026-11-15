@@ -35,14 +35,28 @@ def reconcile(sec):
     """Deployment rows in the objects section: a label, the amount for year 1, the amount for year 2 and the total.
     The two years must add up to the total ('-' is zero). A row that does not add up is reported with its figures."""
     findings = []
-    for _, t in block_texts(sec):
-        for line in t.split("\n"):
+    for b in sec.get("blocks", []):
+        if b.get("type") == "table":
+            # only tables rebuilt from the model's plain-text rows (draft/writer.py, "converted") have the
+            # label, year, year, total order; the builder's own tables have their own column order and are not checked
+            if not b.get("converted"):
+                continue
+            for r in b.get("rows", []):
+                if len(r) == 4 and all(re.fullmatch(NUM, str(v).strip()) for v in r[1:]):
+                    line = " ".join(str(v) for v in r)
+                    m = RE_THREE.match(line)
+                    if m:
+                        a, bb, c = _num(m["a"]), _num(m["b"]), _num(m["c"])
+                        if abs(a + bb - c) > 0.5:
+                            findings.append(f"row does not add up: {m['label'][-50:]!r} {m['a']} + {m['b']} = {a + bb:,.2f}, total {m['c']}")
+            continue
+        for line in (b.get("text") or "").split("\n"):
             m = RE_THREE.match(line.strip())
             if not m:
                 continue
-            a, b, c = _num(m["a"]), _num(m["b"]), _num(m["c"])
-            if abs(a + b - c) > 0.5:
-                findings.append(f"row does not add up: {m['label'][-50:]!r} {m['a']} + {m['b']} = {a + b:,.2f}, total {m['c']}")
+            a, bb, c = _num(m["a"]), _num(m["b"]), _num(m["c"])
+            if abs(a + bb - c) > 0.5:
+                findings.append(f"row does not add up: {m['label'][-50:]!r} {m['a']} + {m['b']} = {a + bb:,.2f}, total {m['c']}")
     return findings
 
 
