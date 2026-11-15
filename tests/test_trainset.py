@@ -88,26 +88,28 @@ def test_facts_and_gates():
     from data.facts import set_common_words
     # the gate must not depend on the generated word list (trainset/work, not in git): name the few words this sentence needs
     set_common_words(["our", "company", "the", "issue", "price", "equity", "share", "machines", "private", "limited"])
-    src = ("Our Company proposes to utilise Rs. 1,860.00 lakhs towards plant and machinery from Ravira Machines Private Limited, "
-           "as approved on 28 August 2026. The Issue Price is Rs. 120 per Equity Share.")
-    tgt, masked = mask(src)
-    facts, errs = normalise({"facts": [
-        {"type": "amount", "label": "Plant and machinery", "value": "1,860.00", "unit": "₹ lakhs"},
-        {"type": "entity", "label": "Supplier", "value": "Ravira Machines Private Limited"},
-        {"type": "date", "label": "Approval date", "value": "August 28, 2026"},
-        {"type": "amount", "label": "Issue price", "value": "120"},
-        {"type": "amount", "label": "Invented", "value": "999.99"},
-        {"type": "nonsense", "label": "x", "value": "y"}]})
-    assert errs and len(facts) == 5
-    kept, g = apply_gates(facts, src, tgt, masked)
-    assert g["pass"] and g["dropped"] == {"imprecise": 1, "leak": 0, "masked": 1}
-    assert {f["label"] for f in kept} == {"Plant and machinery", "Supplier", "Approval date"}
-    _k, g2 = apply_gates([f for f in kept if f["label"] != "Supplier"], src, tgt, masked)
-    assert not g2["pass"] and g2["missing"]["names"] == ["Ravira"]      # names are reported by their distinctive tokens
-    leak = [{"type": "short_text", "label": "Use", "value": "utilise Rs. 1,860.00 lakhs towards plant and machinery from Ravira"}]
-    _k, g3 = apply_gates(normalise(leak)[0] + kept, src, tgt, masked)
-    assert g3["dropped"]["leak"] == 1
-    set_common_words([])
+    try:
+        src = ("Our Company proposes to utilise Rs. 1,860.00 lakhs towards plant and machinery from Ravira Machines Private Limited, "
+               "as approved on 28 August 2026. The Issue Price is Rs. 120 per Equity Share.")
+        tgt, masked = mask(src)
+        facts, errs = normalise({"facts": [
+            {"type": "amount", "label": "Plant and machinery", "value": "1,860.00", "unit": "₹ lakhs"},
+            {"type": "entity", "label": "Supplier", "value": "Ravira Machines Private Limited"},
+            {"type": "date", "label": "Approval date", "value": "August 28, 2026"},
+            {"type": "amount", "label": "Issue price", "value": "120"},
+            {"type": "amount", "label": "Invented", "value": "999.99"},
+            {"type": "nonsense", "label": "x", "value": "y"}]})
+        assert errs and len(facts) == 5
+        kept, g = apply_gates(facts, src, tgt, masked)
+        assert g["pass"] and g["dropped"] == {"imprecise": 1, "leak": 0, "masked": 1}
+        assert {f["label"] for f in kept} == {"Plant and machinery", "Supplier", "Approval date"}
+        _k, g2 = apply_gates([f for f in kept if f["label"] != "Supplier"], src, tgt, masked)
+        assert not g2["pass"] and g2["missing"]["names"] == ["Ravira"]      # names are reported by their distinctive tokens
+        leak = [{"type": "short_text", "label": "Use", "value": "utilise Rs. 1,860.00 lakhs towards plant and machinery from Ravira"}]
+        _k, g3 = apply_gates(normalise(leak)[0] + kept, src, tgt, masked)
+        assert g3["dropped"]["leak"] == 1
+    finally:
+        set_common_words([])
 
 def test_figures_ignore_years_pages_and_fiscal_years():
     f = figures("In FY 2009-10 revenue was 1,234.50 lakhs (see pages 78, 142 and 64).\n12. We grew 15% in 2024.")
