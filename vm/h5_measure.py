@@ -44,7 +44,7 @@ def main(h5: Path):
         known = Known(pool, offer=None, context="")
         drafts = json.loads((bdir / "drafts.json").read_text(encoding="utf-8"))
         items = drafts.items() if isinstance(drafts, dict) else [(d.get("key"), d) for d in drafts]
-        tot = {"figure": 0, "date": 0, "identifier": 0, "name": 0, "page_ref": 0, "small": 0}
+        tot = {"figure": 0, "date": 0, "identifier": 0, "name": 0, "page_ref": 0, "small": 0, "fiscal_year": 0}
         ungrounded = []
         sections = 0
         for key, sec in items:

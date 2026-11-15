@@ -20,8 +20,8 @@ RE_NUM_ONLY = re.compile(rf"^\s*(?:₹|rs\.?|inr)?\s*({NUM})\s*(%|lakhs?|crores?
 RE_PERIOD = re.compile(r"\b(?:FY\s?\d{2,4}(?:-\d{2,4})?|20\d{2}-\d{2}|(?:as\s+at|as\s+on)\s+[^|]{4,30}|"
                        r"(?:31|30)\s+(?:march|september|december|june)\s+20\d{2}|H1\s?FY\d{2,4}|"
                        r"six months ended[^|]{0,25}|20\d{2})\b", re.I)
-RE_DATE = re.compile(r"\b(\d{1,2}(?:st|nd|rd|th)?\s+(?:January|February|March|April|May|June|July|August|"
-                     r"September|October|November|December),?\s+(?:19|20)\d{2})\b", re.I)
+RE_DATE = re.compile(r"\b(\d{1,2}(?:st|nd|rd|th)?\s*(?:January|February|March|April|May|June|July|August|"
+                     r"September|October|November|December),?\s*(?:19|20)\d{2})\b", re.I)
 RE_AMOUNT = re.compile(rf"(?:₹|Rs\.?|INR)\s*({NUM})\s*(lakhs?|crores?|cr\b|million|mn\b)?", re.I)
 RE_PERCENT = re.compile(rf"({NUM})\s?%")
 IDENTIFIERS = {

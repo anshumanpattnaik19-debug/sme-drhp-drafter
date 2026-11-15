@@ -37,6 +37,7 @@ RE_SMALL = re.compile(r"(?:\baged?\s+(?:about\s+|of\s+)?|\bage\s+of\s+)(\d{1,2})
                       r"|(?:₹|Rs\.?|INR)\s?(\d{1,2}(?:\.\d+)?)(?![\d,.])"
                       rf"|(?<![\w.,/])(\d{{1,2}})(?=\s+(?:(?:new|more|additional|skilled|full[- ]time)\s+)?(?:{COUNT_NOUNS})\b)", re.I)
 # licence, registration and certificate numbers: a digit and a separator, such as EIC/1105/18/000299 or 10012022000123
+RE_FY = re.compile(r"\bFY\s?(\d{4}|\d{2})(?:\s*(?:-|–|to)\s*(?:FY\s?)?(\d{4}|\d{2}))?(?!\d)", re.I)
 RE_IDENT = re.compile(r"(?<![\w/-])(?=[A-Z0-9/-]*\d)(?:[A-Z0-9]+[/-]){1,}[A-Z0-9]+(?![\w/-])|\b(?=[A-Z]*\d)[A-Z0-9]{10,}\b")
 # address numbers: "Plot No. 28/29", "Sector - 18", "Survey No. 112/1A"
 RE_ADDR = re.compile(r"\b(?:Plot|Sector|Survey|Khasra|Gat|Ward|Door|Shop|Flat|House|Block|Gala|Unit)\s*(?:No\.?|Nos\.?)?\s*[-:.]?\s*"
@@ -133,6 +134,17 @@ def scan(text, known):
             found.append({"kind": "address", "start": m.start(1), "end": m.end(1), "raw": m.group(1),
                           "grounded": all(k in known.numbers for k in nums)})
             taken.append(m.span(1))
+    for m in RE_FY.finditer(text):                    # "FY2100 to FY2105" is not a period: the years must be consecutive
+        g1, g2 = m.group(1), m.group(2)
+        if not free(*m.span()) or (g2 is None and len(g1) == 2):      # "FY26" in a table header is left alone
+            continue
+        if g2 is not None and (int(g2[-2:]) - int(g1[-2:])) % 100 == 1 and (len(g1) != 4 or len(g2) != 4 or int(g2) - int(g1) == 1):
+            continue                                                  # a fiscal period, as "FY 2023-24" is
+        tok = re.sub(r"\s+", "", m.group(0)).lower()
+        kt = re.sub(r"\s+", "", known.text)
+        grounded = tok in kt or (g2 is None and g1 in kt)
+        found.append({"kind": "fiscal_year", "start": m.start(), "end": m.end(), "raw": m.group(0), "grounded": grounded})
+        taken.append(m.span())
     for m in RE_IDENT.finditer(text):
         raw = m.group(0)
         if len(raw) < 6 or sum(c.isdigit() for c in raw) < 3:       # "COVID-19", "1-2 years", "B-2" are not identifiers

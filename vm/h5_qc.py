@@ -23,8 +23,33 @@ def block_texts(sec):
             yield b.get("type", "paragraph"), b.get("text", "") or ""
 
 
+NUM = r"(?:-|[\d,]+(?:\.\d+)?)"
+RE_THREE = re.compile(rf"^(?P<label>.*?[A-Za-z\)].*?)\s+(?P<a>{NUM})\s+(?P<b>{NUM})\s+(?P<c>{NUM})\s*$")
+
+
+def _num(s):
+    return 0.0 if s == "-" else float(s.replace(",", ""))
+
+
+def reconcile(sec):
+    """Deployment rows in the objects section: a label, the amount for year 1, the amount for year 2 and the total.
+    The two years must add up to the total ('-' is zero). A row that does not add up is reported with its figures."""
+    findings = []
+    for _, t in block_texts(sec):
+        for line in t.split("\n"):
+            m = RE_THREE.match(line.strip())
+            if not m:
+                continue
+            a, b, c = _num(m["a"]), _num(m["b"]), _num(m["c"])
+            if abs(a + b - c) > 0.5:
+                findings.append(f"row does not add up: {m['label'][-50:]!r} {m['a']} + {m['b']} = {a + b:,.2f}, total {m['c']}")
+    return findings
+
+
 def qc_section(key, sec):
     findings = []
+    if key == "objects":
+        findings += reconcile(sec)
     paras = [t for k, t in block_texts(sec) if k in ("paragraph", "bullet", "list") and t.strip()]
     words = sum(len(t.split()) for k, t in block_texts(sec))
     if words < 15 and not sec.get("blocks"):

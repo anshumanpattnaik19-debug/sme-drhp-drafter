@@ -25,8 +25,9 @@ LEAK_N = 8
 MONTHS = {m: i for i, m in enumerate(["january", "february", "march", "april", "may", "june", "july", "august", "september",
                                       "october", "november", "december"], start=1)}
 MON = r"(January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\.?"
-RE_DATES = [re.compile(rf"\b(\d{{1,2}})(?:st|nd|rd|th)?\s+{MON},?\s+((?:19|20)\d{{2}})\b", re.I),
-            re.compile(rf"\b{MON}\s+(\d{{1,2}})(?:st|nd|rd|th)?,?\s+((?:19|20)\d{{2}})\b", re.I),
+RE_DATES = [re.compile(rf"\b(\d{{1,2}})(?:st|nd|rd|th)?\s*{MON},?\s*((?:19|20)\d{{2}})\b", re.I),   # "21September2023" from OCR
+            re.compile(rf"\b{MON}\s*(\d{{1,2}})(?:st|nd|rd|th)?,?\s*((?:19|20)\d{{2}})\b", re.I),
+
             re.compile(r"\b(\d{1,2})[./-](\d{1,2})[./-]((?:19|20)\d{2})\b")]
 # a number starts after a space, "₹" or "Rs." but not inside another number ("1,405.09" is one figure, not 405.09)
 RE_FIG = re.compile(r"(?<![\w,])(?<!\d\.)\(?-?\d[\d,]*(?:\.\d+)?\)?%?(?![\w])")

@@ -62,11 +62,74 @@ objects are a board decision, so they need checking against the source documents
 - Draft quality: not client grade. Repeated-sentence loops in 8 to 10 sections per bundle, table-as-paragraph
   parsing, garbled figures.
 - No drafting code has been changed for these defects yet. The next steps:
-  1. Stop repetition: apply a repeat penalty or a stop-on-repeat rule in the drafting call, and make the loop trim
-     apply to whole repeated sentences, not only to repeated tokens.
+  1. Stop repetition (implemented in code, not yet re-run on the VM): `draft/writer.py` now sends
+     `frequency_penalty` 0.3 on drafting calls (the value the drafting evaluations used) and runs every model draft
+     through `trim_repeats`, which cuts a sentence that loops and keeps one copy. Sub-headings that looped are returned
+     in `loop_trimmed`. The job 64 run had neither step, which is why `loop_trimmed` was 0. Tests:
+     `tests/test_draft_loops.py`.
   2. Parse the model's markdown tables into table blocks.
   3. Validate amounts and years against the source (a year range must be a valid fiscal year; a total must reconcile).
   4. Re-run H5 on all five bundles and re-run this QC.
+
+## 5. Job 65: rerun with the loop fix
+
+Run: VM job 65 (`vm/h5.sbatch`), same model and bundles, with the drafting changes in section 3, step 1 (frequency
+penalty 0.3, `trim_repeats` on every model draft, `loop_trimmed` reported). Outputs in `build/h5_job65/` (drafts and
+blocks copied from the workspace folders). Job 64 outputs are kept on the VM as `~/sme/h5_job64`. Five bundles, 0 job
+errors, 8.5 to 9.7 minutes each.
+
+**Loops (fixed).** The worst repeated sentence is now x7 (was x137). The x6 and x7 repeats are in the risk factors,
+which are written by rules (`draft/red_flags.py`), not by the model, so the loop trim does not touch them. Repeats of
+x2 to x4 across sub-headings remain. `loop_trimmed` fires in 3 to 5 sub-headings per bundle (was 0).
+
+**Grounding (not fixed in this run).** Ungrounded values: Ashtavira 6, Kestrel 3, Bhuvanam 0, Oakvale 0, Tavanvi 1
+(job 64: 0, 0, 1, 0, 0). All of them are dates the model wrote that are not in the bundle files, for example "MSME
+registration dated October 31, 2017" in Ashtavira. The verifier did not mask them because the model had put a blank
+line inside the sentence ("...dated October 31," / "2017 issued by..."). Read as two paragraphs, the verifier never
+sees the whole date. About 70 paragraphs across the five bundles end in a comma right after a date, and many of
+them are split this way; some of the others are table headers. The parser now joins them (`draft/writer.py`, `_join_split_sentences`; test in `tests/test_draft_loops.py`). That change
+is not in job 65, so it is not yet measured on the VM.
+
+**Still open:** the rule-written risk-factor sentences repeat by design; table cells still stored as paragraphs (2.2);
+garbled amounts and year ranges (2.3); the objects reconciliation (2.4).
+
+## 6. Job 66: rerun with the sentence-join fix
+
+Run: VM job 66 (`vm/h5.sbatch`), same model and bundles, with the loop fix and the sentence-join in
+`draft/writer.py` (`_join_split_sentences`) as it stood at submission, i.e. joining a paragraph that ends in a comma.
+Outputs in `build/h5_job66/`. Job 65 outputs are kept on the VM as `~/sme/h5_job65`. Five bundles, 0 job errors,
+8.4 to 9.7 minutes each.
+
+**Grounding.** Ungrounded values: Ashtavira 1, Kestrel 0, Bhuvanam 0, Oakvale 0, Tavanvi 0 (job 65: 6, 3, 0, 0, 1).
+The one left is a page reference, "beginning on page no. 99", where the paragraph ends "...on page no." and "99."
+starts the next block. The sentence-join rule covered a trailing comma only, so it did not join this pair. The rule now
+also joins a paragraph ending in "page no.", a connector or "on"/"of"/"to"/"for"/"and"; test added. That change is not
+in job 66, so it has not been measured on the VM.
+
+**Loops.** Worst repeated sentence x7 (same as job 65; the x6 and x7 repeats are rule-written risk factors). `loop_trimmed`
+fires in 3 to 5 sub-headings per bundle.
+
+## 7. Job 71: final run
+
+Run: VM job 71 (`vm/h5.sbatch`). Model: the base Qwen2.5-7B-Instruct with the A_qa_dpo LoRA adapter attached (vLLM
+`--enable-lora`, served as `sme-drhp-7b`), not the merged copy. Jobs 69 and 70 failed before any drafting: 69 because
+`peft` was missing from the vLLM environment, 70 because the merged model's save hit the VM's disk quota. The merged
+model was deleted to free space; LoRA serving needs no copy. Merged and LoRA serving are the same model up to bf16
+rounding. Five bundles, 0 job errors, 9 to 11 minutes each. Outputs in `build/h5_job71/`.
+
+**Grounding (H5 criterion: zero invented figures): met in all five bundles.** Ungrounded values: 0 in every bundle
+(job 67: 3; job 66: 1; job 65: 10).
+
+**Loops.** Worst repeated sentence x7, the rule-written risk factors (`draft/red_flags.py`), not the model. `loop_trimmed`
+fires in 3 to 5 sub-headings per bundle.
+
+**Objects reconciliation (QC).** The new check flags 3 deployment rows that do not add up. Examples: a row with a
+total and no year allocation ("- - 520"), and "Total deployment 1,860.00 + 520.00 = 2,380.00" against a total of
+4,230. These are for a reviewer; the draft text is not changed.
+
+**Open after this run:** tables written as plain text (2.2): the model writes them as paragraphs, and the fix needs a
+change to the drafting prompt or training. Bundle page count (118 pages) and distinct financial profiles: kept as they
+are at your request.
 
 ## 4. How to reproduce
 

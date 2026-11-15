@@ -238,6 +238,26 @@ the sources but missing from the fact store. The measurement was therefore chang
 6. **Bundle page count**: 118 pages against the 300 to 380 target in the brief.
 7. **Distinct financial profiles** for bundles 2 to 5: not done (shared model).
 
+## 14a. Status after the final round (15 Nov 2026)
+
+Done: the H5 run on all five bundles passes the grounding criterion (zero ungrounded values, job 71, see
+`docs/H5_RESULTS.md` section 7). Repetition loops are fixed (worst x7, rule-written risk factors). The OCR error-rate
+test is recorded in `docs/OCR_EVAL.md`: the base vision model has 12.8% character error and recovers 174 of 186 numbers,
+against 55.8% for the offline RapidOCR, so no fine-tuning is needed yet. Also done: the verifier checks fiscal years,
+OCR dates without spaces are read, a split sentence is one paragraph, the QC checks that deployment rows add up.
+
+Open items, updated:
+1. **Vision model**: Qwen2.5-VL-7B-Instruct is on the VM (16 GB). Its error rates are in `docs/OCR_EVAL.md`.
+2. **GitHub**: the remote is configured (`origin`, branch `eval-harness-verifier`). See the commit for the push status.
+3. **Docker compose**: needs a GPU host with Docker. The VM has no Docker, and the laptop has no NVIDIA GPU.
+4. **Fire NOC scan**: OCR reads the certificate, but the dates ran together ("21September2023"). The date rules now
+   accept that form. Not yet checked in a full extraction run.
+5. **Bundle page count (118 pages) and distinct financial profiles**: kept as they are, at the user's decision.
+6. **Tables written as plain text in drafts**: open. The fix is a change to the drafting prompt or training.
+7. **Objects reconciliation**: the QC flags rows that do not add up. The figures need checking against the board
+   resolution and the source documents before any draft uses them.
+8. **Merged drafting model**: deleted from the VM to free storage. Not needed: LoRA serving runs the same model.
+
 ## 15. Reproduce
 
 ```bash

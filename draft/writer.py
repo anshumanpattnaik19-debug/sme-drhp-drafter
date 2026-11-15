@@ -11,7 +11,7 @@ from __future__ import annotations
 import re
 import time
 
-from data.prompts import drafting_messages, summary_of
+from data.prompts import drafting_messages, summary_of, trim_repeats
 from verify.checks import RE_FIGURE, mask_ungrounded, num_key
 from extract.canonical import current
 from extract.tables import find, tables_from_blocks
@@ -21,10 +21,11 @@ from .red_flags import risk_factors
 from .router import route
 
 ROUTER_K_INFER = 40      # facts per sub-heading at inference; training inputs are own facts + about as many distractors
+# Decoding penalty for drafts, the value the drafting evaluations used (vm/predict_qa.py, vm/rag_eval.py). It lowers
+# loops but does not remove them (MODEL_CARD: 19% of drafts still loop), so trim_repeats cuts what remains.
+DRAFT_FREQUENCY_PENALTY = 0.3
 
 PH = "[●]"
-
-
 
 # ---------- helpers ----------
 
@@ -198,7 +199,26 @@ def parse_markdown(text):
             blocks.append({"type": "table", "rows": rows, "text": "", "facts": []})
         else:
             blocks.append({"type": "paragraph", "text": chunk, "facts": []})
-    return blocks
+    return _join_split_sentences(blocks)
+
+
+RE_OPEN_END = re.compile(r"(,|\bno\.|\bpages?|\bon|\bdated|\bof|\bto|\bfor|\band)$", re.I)
+
+
+def _join_split_sentences(blocks):
+    """A model draft sometimes puts a blank line inside a sentence ("dated October 31," / "2017 issued by ...", or
+    "beginning on page no." / "99."). Read as two paragraphs, the verifier never sees the whole date or page number. A
+    paragraph that ends open (a comma, "page no.", a connector) is joined to the next one when that one goes on in lower
+    case or with a digit."""
+    out = []
+    for b in blocks:
+        prev = out[-1] if out else None
+        if (prev and prev["type"] == "paragraph" and b["type"] == "paragraph"
+                and RE_OPEN_END.search(prev["text"].rstrip()) and re.match(r"[0-9a-z(]", b["text"])):
+            prev["text"] = prev["text"].rstrip() + " " + b["text"]
+        else:
+            out.append(b)
+    return out
 
 
 # ---------- composing a section ----------
@@ -260,7 +280,7 @@ def compose(key, ctx: Ctx, llm=None):
     narrative = list(b.narrative)
     if sec["writer"].startswith("slm"):
         narrative += [s for s in (sec["subheads"] or [sec["title"]]) if s not in built and s not in narrative]
-    engine, usage, prose = "code", {}, {}
+    engine, usage, prose, looped = "code", {}, {}, []
     if narrative and llm is not None:
         # one call per sub-heading, in the format the student is trained on (data/prompts.py)
         outline = _order(sec, b, narrative)
@@ -272,9 +292,13 @@ def compose(key, ctx: Ctx, llm=None):
             routed = [f for f in route(facts, f"{s} {sec['query']}", sec["needs"], k=ROUTER_K_INFER, doc_types=doc_types)
                       if not f.get("superseded")]
             msgs = drafting_messages(ctx.company(), sec["title"], outline, s, routed, summary_of(prev) if prev else "")
-            text, u = llm(msgs)
+            text, u = llm(msgs, frequency_penalty=DRAFT_FREQUENCY_PENALTY)
             for k, v in (u or {}).items():
                 usage[k] = usage.get(k, 0) + (v if isinstance(v, (int, float)) else 0)
+            # a greedy-decoded draft can loop on one sentence; cut it where the loop starts (data/prompts.py)
+            text, cut = trim_repeats(text)
+            if cut:
+                looped.append(s)
             prose[s] = [blk for blk in parse_markdown(text) if blk["type"] != "heading"]
             for blk in prose[s]:                      # the model may not state what the inputs do not support
                 if blk["type"] == "paragraph":
@@ -312,16 +336,17 @@ def compose(key, ctx: Ctx, llm=None):
     attach_citations(blocks, facts)
     if not blocks:
         blocks = [{"type": "note", "text": f"{PH} No input was found for this section.", "facts": []}]
-    return blocks, engine if narrative else "code", usage, b, pending
+    return blocks, engine if narrative else "code", usage, b, pending, looped
 
 
 def write_section(key, ctx: Ctx, llm=None):
-    """Draft one section. llm: callable(messages) -> (text, usage), or None (drafting briefs instead of prose)."""
+    """Draft one section. llm: callable(messages, frequency_penalty=...) -> (text, usage), or None (drafting briefs
+    instead of prose). Sub-headings whose model draft looped are listed in "loop_trimmed"."""
     sec = SECTION_BY_KEY[key]
     facts = ctx.facts
     doc_types = {f["id"]: f.get("doc_type") for f in ctx.files}
     t0 = time.perf_counter()
-    covered, missing, pending, usage = [], [], [], {}
+    covered, missing, pending, usage, looped = [], [], [], {}, []
     if sec["writer"] == "template":
         blocks, engine = write_template(key, ctx.project, facts), "template"
         b = build(key, ctx)
@@ -340,12 +365,12 @@ def write_section(key, ctx: Ctx, llm=None):
         engine = "rules"
         covered = [c for c in sec["checklist"] if any(_rf_covers(c, f) for f in flags)]
     else:
-        blocks, engine, usage, b, pending = compose(key, ctx, llm)
+        blocks, engine, usage, b, pending, looped = compose(key, ctx, llm)
         covered, missing = b.covered, b.missing
     routed = route(facts, f"{sec['title']} {sec['query']}", sec["needs"], doc_types=doc_types) if sec["query"] else []
     return {"blocks": blocks, "writer": sec["writer"], "engine": engine, "routed": [f["id"] for f in routed],
             "covered": covered, "missing": [{"item": m[0], "where": m[1]} for m in missing], "narrative_pending": pending,
-            "latency_s": round(time.perf_counter() - t0, 3), "usage": usage}
+            "loop_trimmed": looped, "latency_s": round(time.perf_counter() - t0, 3), "usage": usage}
 
 
 RF_COVERS = {

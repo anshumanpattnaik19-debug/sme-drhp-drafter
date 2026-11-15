@@ -16,9 +16,12 @@ set -Eeuo pipefail
 source "$HOME/.tracka_environment"
 source "$HOME/venv-teacher/bin/activate"
 cd "$HOME/sme"
-M="$HOME/models/A_qa_dpo_merged"
-vllm serve "$M" --port 8011 --served-model-name sme-drhp-7b --max-model-len 6144 \
-  --gpu-memory-utilization 0.85 > logs/h5_serve.log 2>&1 &
+# The drafting model is the base (shared course storage) with the A_qa_dpo LoRA adapter attached. vLLM serves the
+# adapter under the name sme-drhp-7b, so no merged copy is written: a merged copy would not fit the VM's quota.
+BASE=$(cat /storage/tracka/models/base_model_path.txt)
+ADAPTER="$HOME/checkpoints/A_qa_dpo/run/adapter"
+vllm serve "$BASE" --port 8011 --max-model-len 6144 --gpu-memory-utilization 0.85 \
+  --enable-lora --max-lora-rank 16 --lora-modules "sme-drhp-7b=$ADAPTER" > logs/h5_serve.log 2>&1 &
 SERVE=$!
 trap 'kill $SERVE 2>/dev/null || true; pkill -f "vllm serve" 2>/dev/null || true' EXIT
 ok=0

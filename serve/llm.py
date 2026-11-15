@@ -32,11 +32,15 @@ def check(settings, timeout=4.0):
 
 
 def make_chat(settings):
+    """chat(messages, frequency_penalty=0.0) -> (text, usage). A positive frequency_penalty is sent to the server
+    (vLLM, OpenAI-compatible); 0 leaves it out, so Q&A and other callers keep the server's default."""
     url = settings["model_url"].rstrip("/")
 
-    def chat(messages):
+    def chat(messages, frequency_penalty=0.0):
         body = {"model": settings["model_name"], "messages": messages,
                 "temperature": float(settings.get("temperature", 0.2)), "max_tokens": int(settings.get("max_tokens", 3000))}
+        if frequency_penalty:
+            body["frequency_penalty"] = float(frequency_penalty)
         try:
             r = httpx.post(f"{url}/chat/completions", json=body, headers=_headers(settings), timeout=600)
             r.raise_for_status()
