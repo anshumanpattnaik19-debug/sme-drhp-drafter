@@ -54,7 +54,7 @@ class Doc:
 
     def __init__(self, path, title, font="Arial", size=9.5, letterhead=None, footer_left=None,
                  page_numbers=True, watermark=True, top_margin=None):
-        self.path, self.title, self.font = path, title, font
+        self.path, self.doc_title, self.font = path, title, font
         self.s = styles(font, size)
         self.story = []
         self.letterhead = letterhead      # (line1, line2, line3) or None

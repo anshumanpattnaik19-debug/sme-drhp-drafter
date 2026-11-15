@@ -8,6 +8,7 @@ import "@fontsource/source-serif-4/400-italic.css";
 import "./index.css";
 import App from "./App";
 import { ToastProvider } from "./components/ui";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { AppProvider } from "./lib/state";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
@@ -15,7 +16,9 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
     <BrowserRouter>
       <ToastProvider>
         <AppProvider>
-          <App />
+          <ErrorBoundary>
+            <App />
+          </ErrorBoundary>
         </AppProvider>
       </ToastProvider>
     </BrowserRouter>

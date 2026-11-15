@@ -78,9 +78,9 @@ export function ProjectShell({ children }: { children: ReactNode }) {
   ];
 
   return (
-    <div className="flex h-full">
-      <aside className="flex w-60 shrink-0 flex-col border-r border-border bg-subtle/50">
-        <div className="border-b border-border px-4 py-4">
+    <div className="flex h-full flex-col md:flex-row">
+      <aside aria-label="Project" className="flex shrink-0 flex-col border-b border-border bg-subtle/50 md:w-60 md:border-b-0 md:border-r">
+        <div className="hidden border-b border-border px-4 py-4 md:block">
           <Link to="/projects" className="mb-3 inline-flex items-center gap-1 text-xs text-fg-subtle hover:text-fg">
             <ArrowLeft className="h-3 w-3" /> All projects
           </Link>
@@ -101,14 +101,14 @@ export function ProjectShell({ children }: { children: ReactNode }) {
             </div>
           )}
         </div>
-        <nav className="flex-1 space-y-0.5 overflow-y-auto p-2">
+        <nav aria-label="Project sections" className="flex gap-0.5 overflow-x-auto p-2 scroll-thin md:flex-1 md:block md:space-y-0.5 md:overflow-y-auto md:overflow-x-visible">
           {nav.map((n) => (
             <NavLink
               key={n.to}
               to={n.to}
               className={({ isActive }) =>
                 cn(
-                  "group flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[13px] font-medium transition-colors [&>svg]:h-4 [&>svg]:w-4",
+                  "group flex shrink-0 items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[13px] font-medium transition-colors [&>svg]:h-4 [&>svg]:w-4",
                   isActive ? "bg-surface text-fg shadow-card ring-1 ring-border" : "text-fg-muted hover:bg-muted hover:text-fg",
                 )
               }
@@ -123,12 +123,12 @@ export function ProjectShell({ children }: { children: ReactNode }) {
             </NavLink>
           ))}
         </nav>
-        <JobCard />
-        <div className="border-t border-border px-4 py-3 text-2xs leading-relaxed text-fg-subtle">
+        <div className="hidden md:block"><JobCard /></div>
+        <div className="hidden border-t border-border px-4 py-3 text-2xs leading-relaxed text-fg-subtle md:block">
           First draft for the BRLM and legal counsel. Not for filing.
         </div>
       </aside>
-      <main className="min-w-0 flex-1 overflow-y-auto scroll-thin">{children}</main>
+      <main id="main" tabIndex={-1} className="min-h-0 min-w-0 flex-1 overflow-y-auto scroll-thin outline-none">{children}</main>
       {panel && !onAssistantPage && (
         // an overlay, not a column: the three-pane Draft page keeps its width
         <aside className="fixed bottom-0 right-0 top-14 z-40 flex w-[min(460px,100vw)] flex-col border-l border-border bg-surface shadow-pop animate-slide-in-right">

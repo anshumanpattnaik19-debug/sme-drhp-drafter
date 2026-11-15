@@ -141,8 +141,12 @@ export default function ProjectsPage() {
               return (
                 <Card
                   key={p.id}
+                  role="link"
+                  tabIndex={0}
+                  aria-label={`Open project ${p.offer.company_name || p.name}`}
                   className="group cursor-pointer p-5 transition-shadow hover:shadow-pop"
                   onClick={() => nav(`/p/${p.id}/overview`)}
+                  onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); nav(`/p/${p.id}/overview`); } }}
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary-soft text-primary"><Building2 className="h-4 w-4" /></div>

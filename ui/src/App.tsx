@@ -39,6 +39,12 @@ function ProjectRoutes() {
 export default function App() {
   return (
     <div className="flex h-full flex-col">
+      <a
+        href="#main"
+        className="sr-only z-50 rounded-md bg-surface px-3 py-2 text-sm font-medium shadow-pop focus:not-sr-only focus:fixed focus:left-3 focus:top-3"
+      >
+        Skip to content
+      </a>
       <TopBar />
       <div className="min-h-0 flex-1">
         <Routes>

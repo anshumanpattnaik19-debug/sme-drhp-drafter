@@ -247,6 +247,10 @@ export interface Settings {
   max_tokens: number;
   ocr_enabled: boolean;
   ocr_page_limit: number;
+  ocr_backend?: string;
+  ocr_model_url?: string;
+  ocr_model_name?: string;
+  ocr_api_key?: string;
 }
 
 export interface Health {

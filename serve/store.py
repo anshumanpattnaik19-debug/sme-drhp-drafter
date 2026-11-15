@@ -31,7 +31,12 @@ DEFAULT_SETTINGS = {
     "temperature": 0.2,
     "max_tokens": 3000,
     "ocr_enabled": True,
-    "ocr_page_limit": 12,
+    "ocr_page_limit": 40,
+    # "auto": a vision model when ocr_model_url is set, otherwise RapidOCR; "llm": vision model only; "rapidocr": offline
+    "ocr_backend": "auto",
+    "ocr_model_url": "",
+    "ocr_model_name": "qwen2.5-vl-7b-instruct",
+    "ocr_api_key": "",
 }
 
 

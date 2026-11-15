@@ -279,6 +279,17 @@ def compose(key, ctx: Ctx, llm=None):
             for blk in prose[s]:                      # the model may not state what the inputs do not support
                 if blk["type"] == "paragraph":
                     blk["text"], blk["masked"] = mask_ungrounded(blk["text"], facts, ctx.offer, f"{ctx.company()} {s}")
+                elif blk["type"] == "table":          # table cells are prose too: a date or figure in a header is checked
+                    rows, hits = [], []
+                    for r in blk.get("rows", []):
+                        cells = []
+                        for c in r:
+                            if isinstance(c, str) and c:
+                                c, m = mask_ungrounded(c, facts, ctx.offer, f"{ctx.company()} {s}")
+                                hits += m
+                            cells.append(c)
+                        rows.append(cells)
+                    blk["rows"], blk["masked"] = rows, hits
             prev = text
         engine = "model"
     elif narrative:

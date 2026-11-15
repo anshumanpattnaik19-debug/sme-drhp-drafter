@@ -20,6 +20,7 @@ from concurrent.futures import ThreadPoolExecutor
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from ingest import readers as _readers
 from pydantic import BaseModel
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -81,6 +82,13 @@ def _active_job(pid, kind):
 
 # ---------- helpers ----------
 
+def _ocr_cfg(s):
+    """Vision model for OCR, from Settings. None means RapidOCR (offline) only."""
+    if s.get("ocr_backend") == "rapidocr" or not s.get("ocr_model_url"):
+        return None
+    return {"url": s["ocr_model_url"], "model": s.get("ocr_model_name") or "", "api_key": s.get("ocr_api_key") or ""}
+
+
 def _project(pid):
     try:
         return store.get_project(pid)
@@ -114,7 +122,7 @@ def _summary(p):
 def health():
     s = store.get_settings()
     model = llm.check(s) if s["use_model"] else {"reachable": None}
-    return {"status": "ok", "ocr_available": ocr_available(), "use_model": s["use_model"], "model": model,
+    return {"status": "ok", "ocr_available": ocr_available(), "ocr_error": _readers._ocr_error, "use_model": s["use_model"], "model": model,
             "model_name": s["model_name"], "model_url": s["model_url"]}
 
 
@@ -133,6 +141,10 @@ class SettingsPatch(BaseModel):
     max_tokens: int | None = None
     ocr_enabled: bool | None = None
     ocr_page_limit: int | None = None
+    ocr_backend: str | None = None
+    ocr_model_url: str | None = None
+    ocr_model_name: str | None = None
+    ocr_api_key: str | None = None
 
 
 def _public_settings(s):
@@ -327,6 +339,7 @@ def process(pid: str, body: ProcessIn):
     job = _job(pid, "process", len(todo), f"Processing {len(todo)} file(s)")
 
     def work(job):
+        _readers.set_llm_ocr(_ocr_cfg(settings))
         for f in todo:
             if job["cancel"]:
                 store.update_file(pid, f["id"], status="queued")
@@ -720,7 +733,7 @@ def export(pid: str, include_review: bool = True, include_sources: bool = True):
 
 # ---------- UI ----------
 
-DIST = os.path.join(ROOT, "ui", "dist")
+DIST = os.environ.get("DRHP_UI_DIST") or os.path.join(ROOT, "ui", "dist")
 
 
 @app.exception_handler(404)

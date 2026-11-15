@@ -1,0 +1,19 @@
+# keep the image small: only what the app needs
+.git
+**/__pycache__
+**/*.pyc
+.pytest_cache
+drive/
+trainset/
+evaluate/out/
+rag/corpus_*.jsonl
+workspace/
+bundles/
+colab/
+docs/
+vm/
+ui/node_modules/
+ui/dist/
+*.pdf
+*.docx
+*.zip

@@ -154,6 +154,22 @@ export function SettingsDialog() {
             <Field label="OCR page limit per file" className="mt-4 max-w-xs" hint="Pages beyond the limit are skipped and flagged. Raise it for the final run.">
               <Input type="number" min={1} max={500} value={s.ocr_page_limit} onChange={(e) => set("ocr_page_limit", Number(e.target.value))} disabled={!s.ocr_enabled} />
             </Field>
+            <div className="mt-4 rounded-lg border border-border p-3.5">
+              <div className="text-[13px] font-semibold text-fg">Reading pages with a vision model</div>
+              <div className="mt-0.5 text-xs leading-relaxed text-fg-muted">
+                When a vision model is set, each scanned page is sent to it for transcription, which is more accurate than
+                RapidOCR on tables and stamps. Use a local OpenAI-compatible server (for example vLLM serving Qwen2.5-VL).
+                Leave the address empty to use RapidOCR only, which runs fully offline.
+              </div>
+              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                <Field label="Server address">
+                  <Input value={s.ocr_model_url ?? ""} placeholder="http://127.0.0.1:8000/v1" onChange={(e) => set("ocr_model_url", e.target.value)} disabled={!s.ocr_enabled} />
+                </Field>
+                <Field label="Model name">
+                  <Input value={s.ocr_model_name ?? ""} placeholder="qwen2.5-vl-7b-instruct" onChange={(e) => set("ocr_model_name", e.target.value)} disabled={!s.ocr_enabled} />
+                </Field>
+              </div>
+            </div>
           </section>
         </div>
       )}

@@ -11,6 +11,7 @@ Qwen2.5-VL (PLAN.md section 4); the block shape stays the same.
 from __future__ import annotations
 
 import os
+import re
 
 FORMATS = {
     ".pdf": "pdf", ".docx": "docx", ".xlsx": "xlsx", ".xlsm": "xlsx",
@@ -21,6 +22,7 @@ MIN_TEXT_CHARS = 40          # a PDF page with less text than this is treated as
 
 _ocr_engine = None
 _ocr_checked = False
+_ocr_error = None
 
 
 def ocr_engine():
@@ -31,13 +33,51 @@ def ocr_engine():
         try:
             from rapidocr_onnxruntime import RapidOCR
             _ocr_engine = RapidOCR()
-        except Exception:  # noqa: BLE001 - optional dependency
+        except Exception as e:  # noqa: BLE001 - optional dependency; the reason is shown in /api/health
             _ocr_engine = None
+            global _ocr_error
+            _ocr_error = f"{type(e).__name__}: {e}"
     return _ocr_engine
 
 
+OCR_PROMPT = (
+    "Transcribe all the text on this page exactly as printed, in reading order. Keep each table row on its own line "
+    "and separate cells with ' | '. Keep numbers, dates, names and punctuation exactly. Output only the transcription, "
+    "with no commentary."
+)
+
+# Vision LLM used for OCR: {"url": ".../v1", "model": "...", "api_key": ""} or None (RapidOCR only).
+_llm_ocr = None
+last_ocr_error = None
+
+
+def set_llm_ocr(cfg):
+    """Set (or clear, with None) the vision model used for OCR. Called by the app before each processing run."""
+    global _llm_ocr
+    _llm_ocr = cfg if cfg and cfg.get("url") and cfg.get("model") else None
+
+
+def _ocr_llm(data: bytes) -> str:
+    import base64
+
+    import httpx
+
+    url = _llm_ocr["url"].rstrip("/")
+    headers = {"Authorization": f"Bearer {_llm_ocr['api_key']}"} if _llm_ocr.get("api_key") else {}
+    body = {
+        "model": _llm_ocr["model"], "temperature": 0.0, "max_tokens": 3000,
+        "messages": [{"role": "user", "content": [
+            {"type": "text", "text": OCR_PROMPT},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64," + base64.b64encode(data).decode()}},
+        ]}],
+    }
+    r = httpx.post(f"{url}/chat/completions", json=body, headers=headers, timeout=300)
+    r.raise_for_status()
+    return (r.json()["choices"][0]["message"]["content"] or "").strip()
+
+
 def ocr_available() -> bool:
-    return ocr_engine() is not None
+    return _llm_ocr is not None or ocr_engine() is not None
 
 
 def file_format(path: str) -> str | None:
@@ -45,6 +85,18 @@ def file_format(path: str) -> str | None:
 
 
 def _ocr_image_bytes(data: bytes) -> str | None:
+    """Text of one page image: the vision LLM when configured, otherwise the offline RapidOCR engine.
+
+    If the LLM endpoint fails for a page, that page falls back to RapidOCR and the error is kept in last_ocr_error.
+    """
+    global last_ocr_error
+    if _llm_ocr is not None:
+        try:
+            text = _ocr_llm(data)
+            last_ocr_error = None
+            return text
+        except Exception as e:  # noqa: BLE001 - endpoint problems must not stop the file
+            last_ocr_error = f"LLM OCR failed, used RapidOCR: {e}"
     eng = ocr_engine()
     if eng is None:
         return None
@@ -63,6 +115,41 @@ def _ocr_image_bytes(data: bytes) -> str | None:
     if cur:
         lines.append(" ".join(cur))
     return "\n".join(lines)
+
+
+PAGE_NUMBER_RE = re.compile(r"^(page\s+)?\d{1,4}(\s+of\s+\d{1,4})?$", re.I)
+
+
+def _line_key(line):
+    """A running line is compared as written (spacing and case aside). Digits are kept, so a body sentence that
+    differs only by its numbers is not taken for a header."""
+    return re.sub(r"\s+", " ", line).strip().lower()
+
+
+def strip_running_lines(blocks, min_pages=3):
+    """Remove running headers, footers and page numbers from the text pages of one file, in place.
+
+    A short line (up to 160 characters) that repeats exactly on at least `min_pages` pages and on at least 40% of
+    the text pages is a running header or footer. A line that is only a page number ("12", "Page 12", "Page 12 of 80") is removed on every page. Without
+    this, a footer is read as body text and gets copied into the drafts ("... Restated Financial Information Page 2
+    qualifications ...").
+    """
+    text_blocks = [b for b in blocks if b.get("kind") == "text"]
+    seen = {}
+    for b in text_blocks:
+        for k in {_line_key(x) for x in b["text"].splitlines() if x.strip() and len(x.strip()) <= 160}:
+            if k:
+                seen[k] = seen.get(k, 0) + 1
+    repeated = {k for k, n in seen.items() if n >= min_pages and n >= 0.4 * len(text_blocks)}
+    for b in text_blocks:
+        kept = []
+        for line in b["text"].splitlines():
+            t = line.strip()
+            if t and (PAGE_NUMBER_RE.match(t) or (len(t) <= 160 and _line_key(t) in repeated)):
+                continue
+            kept.append(line)
+        b["text"] = "\n".join(kept).strip()
+    return blocks
 
 
 def _read_pdf(path, ocr, ocr_limit=None, progress=None):
@@ -85,6 +172,7 @@ def _read_pdf(path, ocr, ocr_limit=None, progress=None):
                     blocks.append({"page": i, "loc": f"p. {i}", "kind": "ocr", "text": got})
                     continue
             blocks.append({"page": i, "loc": f"p. {i}", "kind": "needs_ocr", "text": text})
+    strip_running_lines(blocks)
     skipped = sum(b["kind"] == "needs_ocr" for b in blocks)
     if skipped and ocr and ocr_available():
         warnings.append(f"{skipped} scanned page(s) skipped: OCR page limit reached (raise it in Settings).")
