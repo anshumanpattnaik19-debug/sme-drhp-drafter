@@ -85,6 +85,9 @@ def test_risk_factor_segmentation():
 
 
 def test_facts_and_gates():
+    from data.facts import set_common_words
+    # the gate must not depend on the generated word list (trainset/work, not in git): name the few words this sentence needs
+    set_common_words(["our", "company", "the", "issue", "price", "equity", "share", "machines", "private", "limited"])
     src = ("Our Company proposes to utilise Rs. 1,860.00 lakhs towards plant and machinery from Ravira Machines Private Limited, "
            "as approved on 28 August 2026. The Issue Price is Rs. 120 per Equity Share.")
     tgt, masked = mask(src)
@@ -104,7 +107,7 @@ def test_facts_and_gates():
     leak = [{"type": "short_text", "label": "Use", "value": "utilise Rs. 1,860.00 lakhs towards plant and machinery from Ravira"}]
     _k, g3 = apply_gates(normalise(leak)[0] + kept, src, tgt, masked)
     assert g3["dropped"]["leak"] == 1
-
+    set_common_words([])
 
 def test_figures_ignore_years_pages_and_fiscal_years():
     f = figures("In FY 2009-10 revenue was 1,234.50 lakhs (see pages 78, 142 and 64).\n12. We grew 15% in 2024.")
@@ -245,6 +248,10 @@ def test_trim_repeats_cuts_loops_not_single_repeats():
 
 
 def test_real_corpus_loads():
+    import os
+    if not os.path.isdir(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "rag")) or             not os.path.exists(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "trainset", "work")):
+        import pytest
+        pytest.skip("generated training corpus (trainset/) is not in the repository")
     from data.corpus import load_sections
     secs = load_sections("test", limit_docs=1)
     assert secs and all(s.text for s in secs) and {s.split for s in secs} == {"test"}
