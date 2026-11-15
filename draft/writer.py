@@ -239,6 +239,23 @@ def _rows_to_tables(blocks):
 RE_OPEN_END = re.compile(r"(,|\bno\.|\bpages?|\bon|\bdated|\bof|\bto|\bfor|\band)$", re.I)
 
 
+def _row_mismatch(row):
+    """A deployment row [label, year 1, year 2, total] whose two years do not add up to the total ('-' is zero). Rows
+    with a placeholder, or without three amounts, are not checked."""
+    if len(row) != 4:
+        return False
+    vals = []
+    for v in row[1:]:
+        s = str(v).strip()
+        if s == "-":
+            vals.append(0.0)
+        elif re.fullmatch(r"[\d,]+(?:\.\d+)?", s):
+            vals.append(float(s.replace(",", "")))
+        else:
+            return False
+    return abs(vals[0] + vals[1] - vals[2]) > 0.5
+
+
 def _join_split_sentences(blocks):
     """A model draft sometimes puts a blank line inside a sentence ("dated October 31," / "2017 issued by ...", or
     "beginning on page no." / "99."). Read as two paragraphs, the verifier never sees the whole date or page number. A
@@ -340,6 +357,11 @@ def compose(key, ctx: Ctx, llm=None):
                 elif blk["type"] == "table":          # table cells are prose too: a date or figure in a header is checked
                     rows, hits = [], []
                     for r in blk.get("rows", []):
+                        if blk.get("converted") and _row_mismatch(r):
+                            # the model's own deployment row does not add up: its figures are not stated until a reviewer checks
+                            hits.append({"kind": "reconciliation", "raw": " | ".join(str(c) for c in r),
+                                         "context": f"{ctx.company()} {s}"})
+                            r = [r[0]] + [PH] * (len(r) - 1)
                         cells = []
                         for c in r:
                             if isinstance(c, str) and c:

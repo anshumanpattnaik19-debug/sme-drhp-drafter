@@ -33,3 +33,11 @@ none. `docker compose config` is valid.
 
 To test the model in Docker, run the container on a GPU host, or on a host whose model server the laptop can reach
 directly, and point the Settings at it.
+
+## Hosting the model with vLLM for the container (attempted)
+
+The model was served on the VM with vLLM (base model plus the A_qa_dpo adapter), on all interfaces, behind an API key
+(`vm/serve_api.sbatch`). The server answered on the VM. The laptop could not reach it: a connection to the VM's port
+8011 fails ("Unable to connect"), and only SSH is reachable from outside. The VM's SSH also refuses port forwarding. The
+network allows no route from the laptop to the model, so the container could not use it. The job was cancelled and the
+API key removed from both machines.

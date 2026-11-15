@@ -167,8 +167,14 @@ def _from_kv(blocks):
     return out
 
 
+RE_MONTH_WORD = re.compile(r"\b(January|February|March|April|May|June|July|August|September|October|November|"
+                           r"December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sept|Sep|Oct|Nov|Dec)\b\.?", re.I)
+
+
 def _context_label(text, start, words=7):
     before = re.sub(r"\s+", " ", text[max(0, start - 140):start])
+    # a month name belongs to an earlier date, not to this label ("... 21 September 2023 Validupto 20 September 2026")
+    before = RE_MONTH_WORD.sub(" ", before)
     toks = re.findall(r"[A-Za-z][A-Za-z&'/-]*", before)
     return _label(" ".join(toks[-words:])) or "Amount"
 

@@ -105,3 +105,11 @@ def test_write_section_trims_a_looping_draft_and_reports_it():
     assert out["loop_trimmed"], "a looping sub-heading must be reported"
     # the summary has three sub-headings, each drafted from the same looping reply: one copy per paragraph
     assert max(b["text"].count(LOOP) for b in out["blocks"] if b.get("text")) == 1
+
+
+def test_a_deployment_row_that_does_not_add_up_is_masked_not_stated():
+    from draft.writer import _row_mismatch
+    assert _row_mismatch(["Plant", "1,244.00", "616.00", "1,860.00"]) is False
+    assert _row_mismatch(["Total", "1,244.00", "2586.00", "4,230.00"]) is True
+    assert _row_mismatch(["Solar", "-", "-", "520.00"]) is True
+    assert _row_mismatch(["Total", "[●]", "2586.00", "4,230.00"]) is False

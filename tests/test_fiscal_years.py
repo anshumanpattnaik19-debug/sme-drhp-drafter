@@ -28,5 +28,11 @@ def test_a_single_year_is_grounded_when_the_inputs_contain_it():
     assert _fy("Incorporated in FY2031.", facts) == [("FY2031", False)]
 
 
+def test_a_projection_in_the_inputs_grounds_the_same_period_in_the_draft():
+    facts = [{"id": "a", "type": "short_text", "label": "Market", "value": "FY2020 - FY2031P", "unit": "", "period": ""}]
+    assert _fy("market from FY2020 to FY2031 at a CAGR", facts) == [("FY2020 to FY2031", True)]
+    assert _fy("market from FY2020 to FY2025 at a CAGR", facts) == [("FY2020 to FY2025", False)]
+
+
 def test_two_digit_headers_are_left_alone():
     assert _fy("Columns: FY26, FY25 and FY24.") == []

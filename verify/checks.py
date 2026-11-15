@@ -142,7 +142,10 @@ def scan(text, known):
             continue                                                  # a fiscal period, as "FY 2023-24" is
         tok = re.sub(r"\s+", "", m.group(0)).lower()
         kt = re.sub(r"\s+", "", known.text)
-        grounded = tok in kt or (g2 is None and g1 in kt)
+        # the same period in the inputs may be written "FY2020 - FY2031P" (a projection) or "FY2020-21": the dash and
+        # "to" are the same separator, and a trailing P marks a projection, so neither changes which years are meant
+        pat = re.escape(tok.replace("to", "-").replace("–", "-")).replace(r"\-", "[-–]?(?:to)?")
+        grounded = bool(re.search(pat + r"p?(?![a-z0-9])", kt.replace("–", "-"))) or tok in kt or (g2 is None and g1 in kt)
         found.append({"kind": "fiscal_year", "start": m.start(), "end": m.end(), "raw": m.group(0), "grounded": grounded})
         taken.append(m.span())
     for m in RE_IDENT.finditer(text):
