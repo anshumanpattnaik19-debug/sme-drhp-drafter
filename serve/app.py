@@ -35,11 +35,12 @@ from extract.rules import extract_facts  # noqa: E402
 from ingest.classify import CATEGORIES, DOC_TYPES, classify, doc_type_options  # noqa: E402
 from ingest.readers import FORMATS, file_format, ocr_available, read_file  # noqa: E402
 from serve import chat as assistant  # noqa: E402
-from serve import llm, store  # noqa: E402
+from serve import auth, llm, store  # noqa: E402
 from verify.checks import review_pack, verify_section  # noqa: E402
 
 app = FastAPI(title="SME DRHP Drafter", version="0.1",
               description="First-draft DRHP generator for SME issues. Drafts for review by the BRLM and legal counsel only.")
+app.middleware("http")(auth.gate)          # shared password on every page and route when APP_PASSWORD is set
 
 EXEC = ThreadPoolExecutor(max_workers=2)
 JOBS: dict[str, dict] = {}
@@ -167,7 +168,7 @@ def put_settings(patch: SettingsPatch):
 @app.post("/api/settings/test")
 def test_model(patch: SettingsPatch):
     s = {**store.get_settings(), **{k: v for k, v in patch.model_dump().items() if v not in (None, "")}}
-    return llm.check(s, timeout=6.0)
+    return llm.check({**s, **store.pinned()}, timeout=6.0)   # a pinned key is never sent to another address
 
 
 # ---------- projects ----------

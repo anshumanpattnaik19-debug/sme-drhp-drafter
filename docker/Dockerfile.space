@@ -1,0 +1,35 @@
+# DRHP Studio on a Hugging Face Docker Space (docs/HOSTING.md): Dockerfile.app with the Space's port and user.
+# The model runs on RunPod; the Space secrets RUNPOD_API_KEY and APP_PASSWORD and the variable DRHP_MODEL_URL are
+# read at run time and are never in the image.
+
+# stage 1: build the UI
+FROM node:20-slim AS ui
+WORKDIR /ui
+COPY ui/package.json ui/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY ui/ ./
+RUN npm run build
+
+# stage 2: the service
+FROM python:3.12-slim
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 DRHP_WORKSPACE=/app/workspace
+WORKDIR /app
+# OCR (rapidocr-onnxruntime) loads OpenCV, which needs these system libraries in the slim image
+RUN apt-get update && apt-get install -y --no-install-recommends libgl1 libglib2.0-0 libxcb1 && rm -rf /var/lib/apt/lists/*
+COPY requirements-app.txt ./
+RUN pip install --no-cache-dir -r requirements-app.txt
+COPY serve/ serve/
+COPY draft/ draft/
+COPY extract/ extract/
+COPY ingest/ ingest/
+COPY assemble/ assemble/
+COPY verify/ verify/
+COPY rag/ rag/
+COPY data/ data/
+COPY teacher/ teacher/
+COPY --from=ui /ui/dist ui/dist
+# Spaces run the container as user 1000; the workspace (uploads, drafts) is not persistent across restarts
+RUN mkdir -p /app/workspace && chown -R 1000:1000 /app/workspace
+USER 1000
+EXPOSE 7860
+CMD ["python", "-m", "uvicorn", "serve.app:app", "--host", "0.0.0.0", "--port", "7860"]

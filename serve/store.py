@@ -81,16 +81,28 @@ def pdir(pid):
 
 # ---------- settings ----------
 
+def pinned():
+    """Model settings fixed by the host's environment (the Hugging Face Space, docs/HOSTING.md): DRHP_MODEL_URL, with
+    DRHP_MODEL_NAME and the key in DRHP_MODEL_API_KEY or RUNPOD_API_KEY. A user cannot change them in Settings, so
+    the key can never be sent to another address."""
+    url = os.environ.get("DRHP_MODEL_URL", "").strip()
+    if not url:
+        return {}
+    return {"use_model": True, "model_url": url, "model_name": os.environ.get("DRHP_MODEL_NAME", "sme-drhp-7b"),
+            "api_key": os.environ.get("DRHP_MODEL_API_KEY") or os.environ.get("RUNPOD_API_KEY", "")}
+
+
 def get_settings():
     with LOCK:
-        return {**DEFAULT_SETTINGS, **_read(os.path.join(ROOT, "settings.json"), {})}
+        return {**DEFAULT_SETTINGS, **_read(os.path.join(ROOT, "settings.json"), {}), **pinned()}
 
 
 def save_settings(patch):
     with LOCK:
         s = get_settings()
-        s.update({k: v for k, v in patch.items() if k in DEFAULT_SETTINGS})
-        _write(os.path.join(ROOT, "settings.json"), s)
+        pin = pinned()
+        s.update({k: v for k, v in patch.items() if k in DEFAULT_SETTINGS and k not in pin})
+        _write(os.path.join(ROOT, "settings.json"), {k: v for k, v in s.items() if k not in pin})   # no key on disk
         return s
 
 
