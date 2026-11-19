@@ -17,3 +17,5 @@ ui/dist/
 *.pdf
 *.docx
 *.zip
+.runpod.env
+build/

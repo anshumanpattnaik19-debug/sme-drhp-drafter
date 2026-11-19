@@ -4,8 +4,11 @@ Sets the drafting model to the address given, uploads a few issuer files, proces
 model, and checks the result. Writes build/docker_smoke.json.
 
     python vm/docker_smoke.py http://127.0.0.1:8765 http://host.docker.internal:18011/v1 bundles/out/kestrel_flexipak
+
+A model server behind a key (the RunPod endpoint, docs/RUNPOD.md) reads it from MODEL_API_KEY, or RUNPOD_API_KEY.
 """
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -20,7 +23,11 @@ FILES = ["01_Company_Profile_Business_Note.docx", "01_Promoter_Director_KMP_Prof
 def wait(client, job_id, limit=900):
     t0 = time.time()
     while time.time() - t0 < limit:
-        j = client.get(f"/api/jobs/{job_id}").json()
+        try:
+            j = client.get(f"/api/jobs/{job_id}").json()
+        except httpx.RemoteProtocolError:          # the server closes an idle keep-alive connection; poll again
+            time.sleep(1)
+            continue
         if j.get("status") in ("done", "done_with_errors", "cancelled"):
             return j
         time.sleep(5)
@@ -35,7 +42,9 @@ def main(base: str, model_url: str, bundle: Path):
             c.put("/api/settings", json={"use_model": False}).raise_for_status()
             out["model_test"] = "offline drafter (no model server)"
         else:
-            c.put("/api/settings", json={"use_model": True, "model_url": model_url, "model_name": "sme-drhp-7b"}).raise_for_status()
+            api_key = os.environ.get("MODEL_API_KEY") or os.environ.get("RUNPOD_API_KEY", "")
+            c.put("/api/settings", json={"use_model": True, "model_url": model_url, "model_name": "sme-drhp-7b",
+                                         "api_key": api_key}).raise_for_status()
             out["model_test"] = c.post("/api/settings/test").json()
         pid = c.post("/api/projects", json={"name": "Docker smoke test", "board": "bse_sme"}).json()["id"]
         files = [("files", (n, (bundle / n).read_bytes(), "application/octet-stream")) for n in FILES]
