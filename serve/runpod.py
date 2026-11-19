@@ -4,6 +4,8 @@
     python -m serve.runpod create     # vLLM endpoint: base + adapter, no always-on workers        (RUNPOD_API_KEY, HF_TOKEN)
     python -m serve.runpod check      # the app's own calls against it: models, drafting, extraction, streaming
     python -m serve.runpod smoke      # the whole app against it: upload issuer files, process, draft a section
+    python -m serve.runpod update     # re-apply the env and worker settings to the endpoint
+    python -m serve.runpod purge      # drop requests left in the queue (after a cancelled job or an app restart)
     python -m serve.runpod delete     # remove the endpoint
 
 Keys come from the environment, or from `.runpod.env` in the project folder (KEY=value lines, gitignored); they are
@@ -115,7 +117,9 @@ def pick_pools(gpus):
 def endpoint_body(pools, repo_id, args):
     env = {"MODEL_NAME": BASE, "MAX_MODEL_LEN": "6144", "GPU_MEMORY_UTILIZATION": "0.9",
            "ENABLE_LORA": "true", "MAX_LORA_RANK": "16", "MAX_LORAS": "1",
-           "LORA_MODULES": json.dumps([{"name": SERVED, "path": repo_id}]),
+           # one JSON object, not a list: vLLM 0.32 parses each --lora-modules value as a single object (a list, as
+           # RunPod's worker docs show, makes `vllm serve` exit with code 2)
+           "LORA_MODULES": json.dumps({"name": SERVED, "path": repo_id}),
            "HF_TOKEN": "{{ RUNPOD_SECRET_%s }}" % HF_SECRET}
     return {"name": args.name, "image": IMAGE, "type": "QUEUE", "disk": 40, "env": env,
             "gpu": {"pools": [p[0] for p in pools], "count": 1, "minCudaVersion": MIN_CUDA},
@@ -147,6 +151,30 @@ def create(args):
     print(f"model_url for the app's Settings: {s['model_url']}")
 
 
+def update(args):
+    """Apply the current settings (env, workers, image) to the endpoint already created."""
+    st = load_state()
+    if not st.get("endpoint_id") or not st.get("adapter_repo"):
+        sys.exit("no endpoint: run `python -m serve.runpod create` first")
+    body = endpoint_body([("", 24, 0, [])], st["adapter_repo"], args)
+    patch = {k: body[k] for k in ("image", "env", "workers", "flashboot", "timeout")}
+    ep = runpod("PATCH", f"/serverless/{st['endpoint_id']}", json=patch).json()
+    print(f"endpoint {st['endpoint_id']} updated (version {ep.get('version')}): env and worker settings re-applied")
+
+
+def purge(args):
+    """Drop the requests still waiting in the endpoint's queue. RunPod keeps a queued request after the app has given up
+    on it (a cancelled drafting job, a restarted app), and would still run it on a worker."""
+    eid = load_state().get("endpoint_id")
+    if not eid:
+        sys.exit("no endpoint id")
+    h = {"Authorization": f"Bearer {key('RUNPOD_API_KEY')}"}
+    r = httpx.post(f"https://api.runpod.ai/v2/{eid}/purge-queue", headers=h, timeout=30)
+    print(f"queue purged: {r.json().get('removed', 0)} request(s) removed" if r.is_success else f"purge failed: {r.text[:200]}")
+    health = httpx.get(f"https://api.runpod.ai/v2/{eid}/health", headers=h, timeout=30).json()
+    print(f"jobs {health.get('jobs')} | workers {health.get('workers')}")
+
+
 def delete(args):
     eid = args.endpoint or load_state().get("endpoint_id")
     if not eid:
@@ -173,7 +201,9 @@ def test_rows(n):
         return [d] * n, e
     rows = [json.loads(line) for line in path.open(encoding="utf-8")]
     drafts = [r["messages"][:-1] for r in rows if r["metadata"]["skill"] == "drafting"][:n]
-    ext = next(r["messages"][:-1] for r in rows if r["metadata"]["skill"] == "extraction")
+    # an extraction row whose gold answer has facts (the first test row's passage has none)
+    ext = next(r["messages"][:-1] for r in rows if r["metadata"]["skill"] == "extraction"
+               and len(json.loads(r["messages"][-1]["content"])["facts"]) >= 5)
     return drafts, ext
 
 
@@ -308,14 +338,19 @@ def main(argv=None):
     p.add_argument("--model", default=SERVED)
     p.add_argument("--drafts", type=int, default=3)
     p.add_argument("--wait", type=int, default=600, help="seconds to wait for a cold start")
+    p = sub.add_parser("update", help="re-apply the env and worker settings to the endpoint")
+    p.add_argument("--name", default="sme-drhp-7b")
+    p.add_argument("--idle", type=int, default=30, help="seconds a worker stays up after its last request (billed)")
     p = sub.add_parser("smoke", help="the whole app against the endpoint (vm/docker_smoke.py)")
     p.add_argument("--app", default="http://127.0.0.1:8765", help="the running app (source run or Docker container)")
     p.add_argument("--url", help="model URL (default: the endpoint created)")
     p.add_argument("--bundle", default="bundles/out/kestrel_flexipak")
+    sub.add_parser("purge", help="drop requests still queued on the endpoint (and show its jobs and workers)")
     p = sub.add_parser("delete", help="delete the endpoint")
     p.add_argument("--endpoint")
     args = ap.parse_args(argv)
-    return {"upload": upload, "create": create, "check": check, "smoke": smoke, "delete": delete}[args.cmd](args) or 0
+    return {"upload": upload, "create": create, "update": update, "check": check, "smoke": smoke, "purge": purge,
+            "delete": delete}[args.cmd](args) or 0
 
 
 if __name__ == "__main__":

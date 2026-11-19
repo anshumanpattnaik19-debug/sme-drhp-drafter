@@ -121,7 +121,7 @@ def _summary(p):
 @app.get("/api/health")
 def health():
     s = store.get_settings()
-    model = llm.check(s) if s["use_model"] else {"reachable": None}
+    model = llm.status(s) if s["use_model"] else {"reachable": None}    # wakes no serverless worker
     return {"status": "ok", "ocr_available": ocr_available(), "ocr_error": _readers._ocr_error, "use_model": s["use_model"], "model": model,
             "model_name": s["model_name"], "model_url": s["model_url"]}
 

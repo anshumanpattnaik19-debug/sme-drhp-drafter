@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 
 import httpx
@@ -27,6 +28,27 @@ def check(settings, timeout=4.0):
         r.raise_for_status()
         models = [m.get("id") for m in r.json().get("data", [])]
         return {"reachable": True, "models": models, "latency_ms": round((time.perf_counter() - t0) * 1000), "error": None}
+    except Exception as e:  # noqa: BLE001
+        return {"reachable": False, "models": [], "latency_ms": None, "error": str(e)[:200]}
+
+
+RE_RUNPOD = re.compile(r"^(https://api\.runpod\.ai/v2/[^/]+)/openai/v1$")
+
+
+def status(settings, timeout=4.0):
+    """check() for the app's periodic status (the UI polls every 30 s). A RunPod Serverless endpoint is asked for its
+    /health, which starts no worker: a /models call is a billed job that wakes a worker, and polling it would keep one
+    running while the app is merely open (docs/RUNPOD.md)."""
+    m = RE_RUNPOD.match(settings["model_url"].rstrip("/"))
+    if not m:
+        return check(settings, timeout)
+    t0 = time.perf_counter()
+    try:
+        r = httpx.get(f"{m.group(1)}/health", headers=_headers(settings), timeout=timeout)
+        r.raise_for_status()
+        w = r.json().get("workers", {})
+        return {"reachable": True, "models": [settings["model_name"]], "latency_ms": round((time.perf_counter() - t0) * 1000),
+                "error": None, "serverless": True, "workers_running": w.get("running", 0)}   # only running ones are billed
     except Exception as e:  # noqa: BLE001
         return {"reachable": False, "models": [], "latency_ms": None, "error": str(e)[:200]}
 

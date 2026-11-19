@@ -45,7 +45,7 @@ def main(base: str, model_url: str, bundle: Path):
             api_key = os.environ.get("MODEL_API_KEY") or os.environ.get("RUNPOD_API_KEY", "")
             c.put("/api/settings", json={"use_model": True, "model_url": model_url, "model_name": "sme-drhp-7b",
                                          "api_key": api_key}).raise_for_status()
-            out["model_test"] = c.post("/api/settings/test").json()
+            out["model_test"] = c.post("/api/settings/test", json={}).json()      # the route takes a settings body
         pid = c.post("/api/projects", json={"name": "Docker smoke test", "board": "bse_sme"}).json()["id"]
         files = [("files", (n, (bundle / n).read_bytes(), "application/octet-stream")) for n in FILES]
         c.post(f"/api/projects/{pid}/files", files=files).raise_for_status()
@@ -57,7 +57,8 @@ def main(base: str, model_url: str, bundle: Path):
         blocks = d.get("blocks", [])
         out["section"] = {"engine": d.get("engine"), "blocks": len(blocks), "loop_trimmed": d.get("loop_trimmed"),
                           "masked": sum(len(b.get("masked") or []) for b in blocks),
-                          "verification": d.get("verification", {}).get("summary") if isinstance(d.get("verification"), dict) else None}
+                          "verification": {k: v for k, v in (d.get("verification") or {}).items()
+                                           if k in ("grounded", "ungrounded", "grounding", "placeholders", "checklist_coverage")}}
         out["facts"] = len(c.get(f"/api/projects/{pid}/facts").json())
     Path("build").mkdir(exist_ok=True)
     Path("build/docker_smoke.json").write_text(json.dumps(out, ensure_ascii=False, indent=1), encoding="utf-8")

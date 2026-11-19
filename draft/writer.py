@@ -446,7 +446,10 @@ def _rf_covers(item, flag):
 
 
 def make_ctx(project, facts, files, load_blocks):
-    """load_blocks(file_id) -> stored reader output or None."""
+    """load_blocks(file_id) -> stored reader output or None. A "fact" that is an instruction addressed to the
+    assistant (prompt injection in an issuer's file) is left out, so neither drafting nor the assistant uses it."""
+    from rag.guardrails import RE_INJECTION
+    facts = [f for f in facts if not RE_INJECTION.search(f"{f.get('label', '')}: {f.get('value', '')}")]
     blocks, tables = {}, []
     for f in files:
         if f.get("status") != "processed":

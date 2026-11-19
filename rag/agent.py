@@ -22,7 +22,7 @@ from draft.outline import SECTION_BY_KEY, SECTIONS
 from draft.router import route
 from draft.writer import fact_text
 from serve import llm
-from .guardrails import LABELS, Redactor, screen
+from .guardrails import LABELS, Redactor, screen, strip_injections
 from .index import best_sentence, tokens
 
 MAX_TOOL_CALLS = 4
@@ -100,6 +100,7 @@ class Agent:
         self._seen = set()
         self.top_score = 0.0
         self._q = None
+        self.injected: set[str] = set()      # files with an instruction addressed to the assistant (stripped)
 
     # ---------- evidence ----------
 
@@ -107,6 +108,15 @@ class Agent:
         if key in self._seen or len(self.evidence) >= MAX_EVIDENCE:
             return None
         self._seen.add(key)
+        found = 0
+        for f in ("text", "quote", "value"):        # prompt injection in an issuer's file is never evidence
+            if item.get(f):
+                item[f], n = strip_injections(item[f])
+                found += n
+        if found:
+            self.injected.add(item.get("file_name") or "a file")
+            if not (item.get("text") or item.get("value")):
+                return None
         item["n"] = len(self.evidence) + 1
         self.evidence.append(item)
         return item
@@ -256,6 +266,11 @@ class Agent:
             for c in _chunks(text):
                 yield {"type": "delta", "text": c}
                 time.sleep(0.01)
+        if self.injected:
+            note = (f"\n\n_An instruction addressed to the assistant was found in {', '.join(sorted(self.injected))}; "
+                    "it was ignored and is not used as evidence._")
+            yield step("Instruction in a document ignored", ", ".join(sorted(self.injected)), "warn")
+            yield {"type": "delta", "text": note}
         ok, total = self.verify(text)
         yield step("Checking the answer", (f"{ok} of {total} figure(s) traced to the cited evidence" if total else "No figures to check"),
                    "done" if ok == total else "warn")

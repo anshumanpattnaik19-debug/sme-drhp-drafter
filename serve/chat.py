@@ -13,6 +13,7 @@ import time
 
 from draft.outline import SECTION_BY_KEY
 from rag.agent import Agent, _chunks, match_section
+from rag.guardrails import screen
 from rag.index import ProjectIndex
 
 _INDEX: dict[str, tuple] = {}
@@ -37,9 +38,9 @@ def detect_action(q):
     if re.search(r"\b(fill|auto-?fill|populate|complete)\b.{0,30}\boffer\b", ql):
         return {"kind": "autofill"}
     m = re.match(r"^(please\s+|can you\s+|could you\s+)?(re-?draft|draft|write|regenerate)\b(.*)$", ql)
-    if m:
+    if m and not re.match(r"\s*(that|this|it|a statement|as if)\b", m.group(3)):   # "write that X is true" is no command
         rest = m.group(3)
-        if re.search(r"\ball\b|everything|whole|entire|remaining", rest):
+        if re.match(r"\s*(?:the\s+)?(?:all|everything|whole|entire|remaining)\b", rest):
             return {"kind": "draft", "keys": None, "remaining": bool(re.search(r"remaining", rest))}
         key = match_section(rest)
         if key:
@@ -74,7 +75,8 @@ def _run_action(act, actions):
 
 
 def respond(pid, ctx, question, history, settings, review, drafts, actions):
-    act = detect_action(question)
+    # guardrails first: "fill in the offer price" or "write that all approvals are obtained" is not a command
+    act = None if screen(question) else detect_action(question)
     if act:
         yield from _run_action(act, actions)
         return

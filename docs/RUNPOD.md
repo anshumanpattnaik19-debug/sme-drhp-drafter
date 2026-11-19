@@ -66,6 +66,21 @@ an hour of continuous use. `check` prints the estimate for its own run.
 8. **Stop paying entirely:** `python -m serve.runpod delete` removes the endpoint; delete the Hugging Face repo and the
    RunPod secret in their consoles if they are no longer needed.
 
+## First deployment (19 Nov 2026)
+
+Endpoint `d76m7tnejfo38z`, adapter `18Anshu/sme-drhp-7b-lora` (private). Workers were placed on a 24 GB slice of an
+RTX PRO 6000 (EUR-IS-2).
+
+| check | result |
+|---|---|
+| first start | about 4 minutes (image, model load, vLLM compile); later starts reuse FlashBoot |
+| `check` | all passed: `sme-drhp-7b` served, the app's 4 s check reachable, 3 drafts at 14–16 tokens/s with no loop, extraction valid JSON, streaming first token after 1.4 s; about 330 s of worker time, about $0.07 |
+| `smoke` (the app) | 6 issuer files processed (740 facts); `summary` drafted by the model in 196 s: 67 blocks, 0 ungrounded figures, 18 values masked by the verifier, one sub-heading trimmed at a loop |
+| app red team (`evaluate/app_redteam.py`) | 23 pass, 2 reviewed by hand, 0 fail after the fixes (docs/RED_TEAM_LOG.md) |
+| idle | 0 running workers, $0.00000/s; the app's status poll starts no worker |
+
+Spend for the whole first deployment, including the failed first start, the runaway draft and both red-team runs: $0.31 ($10.00 to $9.69).
+
 ## Known limits
 
 - After an idle spell the first request waits for a cold start (30–90 s); the app's 4-second model check shows the
@@ -73,3 +88,11 @@ an hour of continuous use. `check` prints the estimate for its own run.
 - RunPod's docs do not say how LoRA adapter names appear in `/models`; `check` reports it. If `sme-drhp-7b` is missing
   there, set the app's model name to the name `check` lists.
 - The optional vision OCR model is not hosted; RapidOCR (offline) is used.
+- RunPod's worker docs show `LORA_MODULES` as a JSON list; vLLM 0.32 needs one JSON object, otherwise `vllm serve` exits
+  with code 2 and the worker crash-loops. `serve/runpod.py` writes the object form.
+- A request stays queued on RunPod after the app gives up on it (a cancelled drafting job, a restarted app) and would
+  still run. `python -m serve.runpod purge` drops them and shows the endpoint's jobs and workers.
+- The app's status (polled by the UI every 30 s) asks RunPod's `/health`, which starts no worker. Asking `/models`
+  would be a billed job that keeps a worker awake while the app is merely open.
+- Workers on a 24 GB MIG slice write about 15 tokens/s, so a sub-heading takes 10–35 s; a full set of narrative
+  sections is roughly 30–60 minutes of worker time (about $0.40–0.75).
