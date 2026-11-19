@@ -37,3 +37,28 @@ environment: `/` redirected to sign-in, `/api/projects` gave 401 for reads and w
 right one loaded the UI, Settings showed the RunPod URL with the key hidden, and the assistant answered from two uploaded
 issuer files with the model (330 s including the cold start). The password did not appear in the container log.
 Tests: `tests/test_auth.py`.
+
+## On a RunPod CPU pod, started on demand (chosen 19 Nov 2026)
+
+A client link needs no RunPod key, so the app runs on a CPU pod (a load-balancing serverless endpoint would need the
+RunPod key on every request). `serve/pod.py` drives it through the RunPod API; nothing is always on:
+
+| piece | where it runs | cost |
+|---|---|---|
+| the app (password gate, UI, API) | RunPod CPU pod, 2 vCPU, 8 GB (`cpu3g`) | $0.08 per hour while running; $0 when stopped |
+| the model | RunPod Serverless endpoint (docs/RUNPOD.md) | per second while answering; $0 idle |
+| the launcher page | free Hugging Face Space (`launcher/`, no app code) | $0 |
+
+- **Start, stop, status:** `python -m serve.pod start | stop | status` (also `bundle` and `create` for the first setup).
+  The pod's link is `https://<pod id>-7860.proxy.runpod.net`. A stopped pod resumes on the same host, so the link stays
+  the same; it changes only if the pod is terminated and created again.
+- **Without a terminal:** the launcher page asks for the same password, starts the pod if it is stopped, shows progress
+  while the app installs (about 3–4 minutes) and then opens the app. It holds a RunPod key that can manage pods, never
+  shown to the browser.
+- **Auto-stop:** the app stops its own pod after `POD_IDLE_MINUTES` (30 by default; `create --idle N`) without use. The
+  UI's status poll and the sign-in page do not count as use, and a running job (processing, drafting) keeps the pod up.
+- **Code delivery:** the pod runs the public `python:3.12-slim` image and at each start downloads the app bundle (code
+  and built UI) from a private Hugging Face repo with the token held as a RunPod secret; the token is removed from the
+  environment before the app starts.
+- **Keys:** `RUNPOD_PODS_KEY` (a RunPod key with Pods read/write) is separate from the model key. In the pod both are
+  RunPod secrets; on the launcher Space the pods key and the password are Space secrets.

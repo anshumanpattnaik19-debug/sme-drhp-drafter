@@ -35,16 +35,19 @@ from extract.rules import extract_facts  # noqa: E402
 from ingest.classify import CATEGORIES, DOC_TYPES, classify, doc_type_options  # noqa: E402
 from ingest.readers import FORMATS, file_format, ocr_available, read_file  # noqa: E402
 from serve import chat as assistant  # noqa: E402
-from serve import auth, llm, store  # noqa: E402
+from serve import auth, idle, llm, store  # noqa: E402
 from verify.checks import review_pack, verify_section  # noqa: E402
 
 app = FastAPI(title="SME DRHP Drafter", version="0.1",
               description="First-draft DRHP generator for SME issues. Drafts for review by the BRLM and legal counsel only.")
+# the last middleware added runs first: the password gate, then the use clock, so unsigned visitors are not use
+app.middleware("http")(idle.touch)
 app.middleware("http")(auth.gate)          # shared password on every page and route when APP_PASSWORD is set
 
 EXEC = ThreadPoolExecutor(max_workers=2)
 JOBS: dict[str, dict] = {}
 JOBS_LOCK = threading.Lock()
+idle.watch(lambda: any(j["status"] == "running" for j in list(JOBS.values())))   # auto-stop on a RunPod pod
 MAX_UPLOAD_MB = 200
 
 
