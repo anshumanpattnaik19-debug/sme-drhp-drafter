@@ -9,6 +9,10 @@ with a one-sentence overlap; each schedule (Excel table or Word table) becomes c
 and up to 8 rows, so a row is always read with its column names. Dense retrieval is used only when
 DRHP_DENSE_MODEL names a sentence-transformers model that is installed (e.g. BAAI/bge-m3 on the GPU box);
 on the laptop BM25 alone is used and the result says so.
+
+Reranking (a documented decision): when DRHP_RERANK_MODEL names an installed sentence-transformers cross-encoder
+(BAAI/bge-reranker-v2-m3 was measured on the course VM, docs/RAG_DECISIONS.md), the top RERANK_DEPTH candidates of the
+first stage are re-scored against the query and re-ordered; otherwise the first-stage order is kept.
 """
 from __future__ import annotations
 
@@ -136,16 +140,39 @@ class _Dense:
         return cls.model
 
 
+RERANK_DEPTH = 30
+
+
+class _Rerank:
+    model = None
+    tried = False
+
+    @classmethod
+    def get(cls):
+        name = os.environ.get("DRHP_RERANK_MODEL")
+        if not name or cls.tried:
+            return cls.model
+        cls.tried = True
+        try:
+            from sentence_transformers import CrossEncoder
+            cls.model = CrossEncoder(name)
+        except Exception:  # noqa: BLE001 - optional on the laptop
+            cls.model = None
+        return cls.model
+
+
 class ProjectIndex:
     def __init__(self, ctx):
         self.chunks = build_chunks(ctx)
         self.bm25 = BM25([f"{c.title} {c.text}" for c in self.chunks]) if self.chunks else None
         self.dense = _Dense.get()
         self.emb = self.dense.encode([c.text for c in self.chunks], normalize_embeddings=True) if self.dense and self.chunks else None
+        self.rerank = _Rerank.get()
 
     @property
     def method(self):
-        return "BM25 + dense (RRF)" if self.emb is not None else "BM25"
+        first = "BM25 + dense (RRF)" if self.emb is not None else "BM25"
+        return first + " + reranker" if self.rerank is not None else first
 
     def search(self, query, k=6, kinds=("passage", "table"), doc_types=None):
         if not self.bm25:
@@ -162,6 +189,10 @@ class ProjectIndex:
             for r, i in enumerate(dense):
                 rrf[i] += 1 / (60 + r)
             ranked = sorted(rrf, key=lambda i: -rrf[i])
+        if self.rerank is not None and len(ranked) > 1:
+            head = ranked[:RERANK_DEPTH]
+            scores = self.rerank.predict([(query, f"{self.chunks[i].title} {self.chunks[i].text}") for i in head])
+            ranked = [i for _, i in sorted(zip(scores, head), key=lambda x: -float(x[0]))] + ranked[RERANK_DEPTH:]
         return [Hit(self.chunks[i], bm[i], r) for r, i in enumerate(ranked[:k])]
 
 
