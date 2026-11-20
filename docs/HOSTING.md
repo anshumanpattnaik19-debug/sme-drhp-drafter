@@ -120,3 +120,19 @@ Proof, with the open `/healthz` start counter kept on the volume: 1 at the first
 minutes, measured: stopped 10 min after the app started) and was started again, 3 on a brand-new pod after the old one was deleted.
 `/healthz` shows counts only: boot count, number of projects, idle seconds and the idle limit.
 
+
+## Before a demo (20 Nov 2026)
+
+`python -m serve.warmup` starts the app pod (re-creating it on another host if its own has no room, which changes its
+address: the launcher finds it by name) and sends the model one 1-token request, which starts a worker. Measured on 20 Nov
+2026: pod ready in 29 s, model answered after **389 s**, although RunPod's `/health` reported a worker as "idle/ready"
+beforehand, so `/health` does not show whether a worker has the model loaded. Run it at least 10 minutes before a demo;
+`--keep-warm 30` then keeps one worker up for 30 minutes (one tiny request every 20 s, about $0.75 an hour, capped at
+120 minutes, stops by itself). It changes no endpoint setting.
+
+## Which code is live
+
+`/healthz` (open, counts only) reports `guard_build` (a hash of the guard's source), `rai` (Responsible AI policy version and
+mode) and `commit`: the git commit the bundle or image was built from, with `+N` when N files differed from it. The bundle
+records it in `BUILD_INFO.json` (`serve/pod.py`); the Docker images take it as a build argument
+(`--build-arg GIT_COMMIT=$(git rev-parse HEAD)`).

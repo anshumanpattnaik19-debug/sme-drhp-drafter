@@ -47,3 +47,21 @@ The model was served on the VM with vLLM (base model plus the A_qa_dpo adapter),
 8011 fails ("Unable to connect"), and only SSH is reachable from outside. The VM's SSH also refuses port forwarding. The
 network allows no route from the laptop to the model, so the container could not use it. The job was cancelled and the
 API key removed from both machines.
+
+## The container with the live model (20 Nov 2026)
+
+The earlier blocker (no port forwarding from the course VM) does not apply to the RunPod endpoint, which is reachable over
+HTTPS. Image `drhp-studio:ac98415` (built with `--build-arg GIT_COMMIT=...`, 1.43 GB, now including `rai/`, which the
+Dockerfiles had not copied: an image built before this fix ran without the Responsible AI layer and said so in the chat
+steps) was run on the laptop as `docker run -p 8780:8765 drhp-studio:ac98415`, the model woken with
+`python -m serve.warmup --skip-pod`, and `python -m serve.runpod smoke --app http://127.0.0.1:8780` run against it.
+
+| Step | Result |
+|---|---|
+| `/healthz` of the container | `commit ac98415bcede`, `rai 1.1:enforce`, guard `cf30665405c3` |
+| Model woken | 140 s (cold start) |
+| Settings test from inside the container | endpoint reachable, `sme-drhp-7b` listed |
+| Upload and processing | 6 issuer files, 740 facts |
+| `summary` drafted **by the model** | 14 blocks, 0 values masked, 0 ungrounded figures, no loop, grounding 0.818 |
+
+The container and the model work together; the compose file's local vLLM service is still untested (no GPU on the laptop).

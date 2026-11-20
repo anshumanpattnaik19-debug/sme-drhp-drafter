@@ -10,7 +10,7 @@ model:
   adapter: A_qa3_dpo3
   adapter_repo: 18Anshu/sme-drhp-7b-lora-v2
   rollback_adapter_repo: 18Anshu/sme-drhp-7b-lora
-  quantised_export: A_qa3_dpo3_awq (W4A16, not served in production)
+  quantised_export: 18Anshu/sme-drhp-7b-awq (A_qa3_dpo3 merged, AWQ W4A16; not served in production)
   training_log: RETRAINING_LOG.md
   model_card: docs/MODEL_CARD.md
   datasets:                       # relative to the repository root; missing files are reported, not fatal

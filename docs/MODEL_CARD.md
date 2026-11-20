@@ -94,5 +94,5 @@ requests (harmful compliance 62% to 0% on 8 probes, guardrail rows 38% to 100%).
 * The test set is 199 rows from 75 companies; intervals are wide (see the evaluation report).
 * One teacher produced the training data; its errors are in the training data too.
 * The judge is the teacher model, not an independent judge (the plan's gpt-oss-20b did not fit the VM's disk quota).
-* Serving runs the adapter on the bf16 base (RunPod). An AWQ 4-bit export was evaluated on the course VM (5.6 GB, about 3x faster decoding, Q&A F1 0.853 against 0.876) and is not served in production.
+* Serving runs the adapter on the bf16 base (RunPod). An AWQ 4-bit export (private repo `18Anshu/sme-drhp-7b-awq`) was evaluated on the course VM (5.6 GB, about 3x faster decoding, Q&A F1 0.853 against 0.876) and is not served in production.
 * The model has not been reviewed by a practising DRHP reviewer on blind comparison; that step needs the project owner.
