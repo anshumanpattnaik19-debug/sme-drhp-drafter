@@ -1,4 +1,4 @@
-# DRHP Studio: the drafter's web UI
+# DRHP Copilot: the drafter's web UI
 
 A local web app in front of the pipeline in PLAN.md: upload the issuer's files, check the extracted facts,
 fill the offer details, draft the SME DRHP section by section, resolve the review pack, export a `.docx`.
@@ -84,3 +84,19 @@ Data stays on this machine in `sme_drhp_drafter/workspace/` (one folder per proj
 ```
 python -m pytest tests -q
 ```
+
+## Added 19 Nov 2026
+
+* **Draft 1, 2, 3 per section.** Every redraft of a section is saved as the next numbered draft; the last three are kept.
+  The section header's "Draft N of M" menu lists them (words, figures not found, placeholders, sign-off) and picks the one
+  the review, the export and the assistant use. "Redraft" is per section; "Draft all sections" adds a draft to each.
+* **Cancel and reset.** A labelled Cancel on the job card, on the Documents toolbar (Cancel processing), on an upload in
+  progress (Cancel upload) and on the Draft toolbar (Cancel). A cancel stops after the file or section being worked on.
+  Documents > More > Remove files not yet read clears everything queued or failed and keeps what was read.
+* **Phone and tablet.** The Draft page shows the section list and the document as two screens on a phone; the Checks panel
+  is a slide-over below 1280 px; the upload box stacks. Escape closes the assistant panel.
+* **Failure handling.** A banner when the service cannot be reached, a "Waking the model" notice before the first section
+  when the model's GPU worker is asleep, a clear message when the model is unreachable, and an expired sign-in on the hosted
+  app opens the sign-in page and returns to the same page afterwards.
+* **Context window.** The model's window is 32,768 tokens; a prompt over budget loses its lowest-ranked facts and passages
+  first (`draft/writer.py fit_messages`), and the draft records `context_trimmed`.

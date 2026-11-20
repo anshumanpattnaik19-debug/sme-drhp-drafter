@@ -1,9 +1,9 @@
-# DRHP Studio
+# DRHP Copilot
 
 Drafts SME offer documents (DRHP sub-sections for BSE SME) from an issuer's own files. Every figure keeps its source,
 and a figure the files do not support is masked as `[●]` rather than stated.
 
-DRHP Studio runs on the user's computer. Issuer files are read, OCR'd and indexed locally, and stored in the user's
+DRHP Copilot runs on the user's computer. Issuer files are read, OCR'd and indexed locally, and stored in the user's
 data folder. Several issuers can be kept in one installation: each project has its own folder.
 
 ## Install (Windows)

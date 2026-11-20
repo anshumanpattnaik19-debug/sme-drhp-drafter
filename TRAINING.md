@@ -1,5 +1,7 @@
 # Training pipeline (PLAN.md section 5, Week 0)
 
+> A one-line-per-run record of every retraining and why it was done: [RETRAINING_LOG.md](RETRAINING_LOG.md).
+
 Builds the training set for the SME DRHP drafter from the 455 SME offer documents already split into SEBI sections
 in `../ipo_prospectus_sft/chunks/` (train 354 / test 101 documents, split by company). Everything here runs on the
 laptop except the teacher and training stages, which run on Colab.

@@ -91,7 +91,7 @@ significant on 51 companies. Against the template B2: fact use +0.49 and ROUGE-L
 drafts with an invented figure (p = 0.004). Raw model output cannot meet H1/H2, so the verifier now masks what it
 cannot ground (FAILURE_LOG 25, fixed the same day; also applied to model prose in the app). The system is scored after
 that step (`python -m evaluate.verified`, then `evaluate.run` with `--system A_dpo_f03_verified`): **H2 passes**
-(0 of 89 drafts invent a figure), **H1 grounding 0.990 [0.978, 0.998]** (meets 0.98; the R0 interval comparison is
+(0 of 89 drafts invent a figure; **superseded 20 Nov 2026: new adapter A_qa3_dpo3 deployed, 0 of 89 after the repaired guard and metric (level with the base), see FAILURE_LOG item 34 and RETRAINING_LOG run 14**), **H1 grounding 0.990 [0.978, 0.998]** (19 Nov setup) (meets 0.98; the R0 interval comparison is
 pending until R0 is run); fact use 0.553 (unmasked 0.555). The verifier also checks places and organisations against
 `verify/vocab.txt` (generic offer-document words from the train split). Against the base model with the same verifier:
 grounding +0.03 (p = 0.03), distractor leakage −0.11 (p = 0.05), fact use +0.05 (p = 0.16). Tests: 52 pass.
