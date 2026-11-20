@@ -68,3 +68,21 @@ def test_pinned_model_settings_cannot_be_changed_or_sent_elsewhere(monkeypatch):
     monkeypatch.setattr("serve.llm.check", lambda s, timeout=4.0: seen.append(s["model_url"]) or {"reachable": False})
     c.post("/api/settings/test", json={"model_url": "https://attacker.example/v1"})
     assert seen == ["https://api.runpod.ai/v2/abc/openai/v1"]
+
+
+def test_healthz_is_open_and_shows_the_idle_clock_without_counting_as_use(monkeypatch):
+    import importlib
+
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setenv("APP_PASSWORD", "test-only-pw")
+    monkeypatch.setenv("APP_SESSION_SECRET", "s" * 32)
+    from serve import app as appmod
+    appmod = importlib.reload(appmod)
+    c = TestClient(appmod.app)
+    assert c.get("/api/projects").status_code == 401                       # the gate is on
+    r = c.get("/healthz")
+    assert r.status_code == 200 and r.json()["ok"] is True and r.json()["boot_count"] >= 1
+    assert set(r.json()) == {"ok", "boot_count", "projects", "idle_seconds", "idle_limit_minutes", "guard_build", "rai", "commit"}   # counts, code hash, RAI policy, commit
+    from serve import idle
+    assert "/healthz" in idle.IGNORED

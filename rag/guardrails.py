@@ -27,7 +27,7 @@ RULES = [
     ("omission", re.compile(r"\b(?:soften|tone down|downplay|water down|sound less|make (?:it|them|this) less|less serious|"
                             r"so (?:that )?investors (?:skip|miss|ignore))\b", re.I)),
     ("invest", re.compile(r"\b(?:should (?:i|we|investors?) (?:invest|subscribe|buy|apply)|good investment|worth (?:investing|"
-                          r"buying|subscribing)|list(?:ing)? (?:at a )?(?:premium|gain)|expected returns?|grey market|\bGMP\b|"
+                          r"buying|subscribing)|list(?:ing)? (?:at a )?(?:premium|gains?)|expected returns?|grey market|\bGMP\b|"
                           r"target price|buy or (?:sell|avoid)|recommend (?:subscribing|investing|buying)|valuation .{0,20}attractive)\b", re.I)),
     ("price", re.compile(r"\b(?:issue|offer|anchor|floor|cap) price\b|\bprice band\b|\blot size\b|\bminimum (?:application|bid) lot\b|"
                          r"\b(?:issue|offer|bid|ipo) (?:open|opens|close|closes|opening|closing)\b|\bissue size in (?:rupees|₹)", re.I)),

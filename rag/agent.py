@@ -93,7 +93,24 @@ def expand(q, key=None):
     return " ".join([q] + extra)
 
 
+_RAI = None
+
+
+def _rai():
+    """The Responsible AI layer (rai/), loaded once; None if it cannot load (the assistant then runs as before)."""
+    global _RAI
+    if _RAI is None:
+        try:
+            from rai.responsible_ai import ResponsibleAI
+            _RAI = ResponsibleAI()
+        except Exception:  # noqa: BLE001 - optional layer
+            _RAI = False
+    return _RAI or None
+
+
 class Agent:
+    tenant = None                                     # the project id, set by serve/chat.py (audit log, tenant checks)
+
     def __init__(self, ctx, index, review, drafts):
         self.ctx, self.index, self.review, self.drafts = ctx, index, review, drafts
         self.evidence: list[dict] = []
@@ -219,6 +236,26 @@ class Agent:
             yield {"type": "delta", "text": answer}
             yield {"type": "done"}
             return
+        rai = _rai()
+        if rai is not None:                           # rai/: jailbreak, extraction, financial crime, harm (RESPONSIBLE_AI.md)
+            try:
+                v = rai.check_input(question, tenant=self.tenant)
+            except Exception as e:  # noqa: BLE001 - the safety layer must never break a chat
+                v = None
+                yield step("Responsible AI check skipped", str(e)[:100], "warn")
+            if v is not None and v.action == "refuse":
+                yield step("Responsible AI", f"Request refused: {', '.join(v.categories)}", "warn")
+                yield {"type": "meta", "engine": "guardrail", "model": None, "retrieval": self.index.method, "sources": []}
+                yield {"type": "delta", "text": v.message}
+                yield {"type": "done"}
+                return
+            if v is not None and v.action == "rewrite":       # a judgement of a person: one neutral question for everyone
+                yield step("Responsible AI", "Question about a person's capability answered from the documents' facts", "done")
+                question, judge_note = v.text, v.message
+            else:
+                judge_note = None
+        else:
+            judge_note = None
         mode, key, steps = self.plan(question)
         yield step("Planning", {"missing": "Checking the review pack for open items", "status": "Reading the review pack",
                                 "risks": "Reading the risk factors and the issuer's files",
@@ -271,9 +308,21 @@ class Agent:
                     "it was ignored and is not used as evidence._")
             yield step("Instruction in a document ignored", ", ".join(sorted(self.injected)), "warn")
             yield {"type": "delta", "text": note}
+        if judge_note:
+            yield {"type": "delta", "text": f"\n\n_{judge_note}_"}
         ok, total = self.verify(text)
         yield step("Checking the answer", (f"{ok} of {total} figure(s) traced to the cited evidence" if total else "No figures to check"),
                    "done" if ok == total else "warn")
+        if rai is not None:                           # the answer is already shown: annotate and log, never rewrite it here
+            try:
+                r = rai.check_output(text, [_line(e) for e in self.evidence], tenant=self.tenant, kind="qa", input_text=question)
+                h = r.report.get("hallucination", {})
+                yield step("Responsible AI", f"{h.get('support', 'checked')}; " + (", ".join(r.flags) or "no flags"),
+                           "warn" if r.flags else "done")
+                if "unsupported_claims" in r.flags or "bias_language" in r.flags or "pii_redacted" in r.flags:
+                    yield {"type": "delta", "text": f"\n\n_{r.notice} Please check flagged points against the documents._"}
+            except Exception as e:  # noqa: BLE001
+                yield step("Responsible AI check skipped", str(e)[:100], "warn")
         yield {"type": "done"}
 
     def _model_tools(self, question, settings, step):

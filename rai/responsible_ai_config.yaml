@@ -1,0 +1,69 @@
+# Responsible AI policy for DRHP Copilot (rai/). Every threshold here is a policy choice, not a measured guarantee.
+# Load with rai.responsible_ai.load_config(path); DRHP_RAI_CONFIG overrides the path.
+
+version: "1.1"           # 1.1 (20 Nov 2026): neutral rewrite of questions judging a person (bias mitigation)
+
+# The model the policy describes (transparency / provenance). Hashes of the dataset files are computed at run time.
+model:
+  name: sme-drhp-7b
+  base: Qwen/Qwen2.5-7B-Instruct
+  adapter: A_qa3_dpo3
+  adapter_repo: 18Anshu/sme-drhp-7b-lora-v2
+  rollback_adapter_repo: 18Anshu/sme-drhp-7b-lora
+  quantised_export: A_qa3_dpo3_awq (W4A16, not served in production)
+  training_log: RETRAINING_LOG.md
+  model_card: docs/MODEL_CARD.md
+  datasets:                       # relative to the repository root; missing files are reported, not fatal
+    train: trainset/out/train_v3.jsonl
+    test: trainset/out/test_v2.jsonl
+    test_app: trainset/out/test_app.jsonl
+    dpo_pairs: trainset/out/onpolicy_pairs.jsonl
+
+# enforce: refusals and masks change what the user sees. observe: checks run and are logged, output is unchanged.
+mode: enforce
+
+hallucination:
+  action: mask                    # mask | abstain | flag. mask = unsupported values become [●] (draft/verify behaviour)
+  min_support_ratio: 0.8          # below this share of grounded claims an answer is treated as unsupported
+  max_unsupported_claims: 0       # more than this many unsupported figures, dates or regulation numbers -> action
+  check_names: false              # proper names are noisy to extract; figures, dates and regulation numbers are checked
+  hedge_terms: [assume, assumed, assuming, estimated, estimate, expected, approximately, around, likely, may, might,
+                proposed, projected, subject to, to be confirmed, tentative, intends to, anticipate]
+
+privacy:
+  backend: builtin                # builtin | presidio (Microsoft Presidio, if installed; the built-in recognisers are added to it)
+  redact_token: "[redacted]"
+  # an individual's PAN (4th letter P) is personal data; a company's PAN, CIN, GSTIN and DIN are disclosed in a DRHP
+  redact: [aadhaar, pan_individual, mobile, personal_email, bank_account, card_number, passport, date_of_birth]
+  # in a draft or extraction of the issuer's own text, these may be stated when a source holds the same value: a filed SME
+  # DRHP's promoter section discloses an individual promoter's PAN and date of birth. Never in a Q&A answer.
+  allowed_in_drafts_if_in_source: [pan_individual, date_of_birth]
+  personal_email_domains: [gmail.com, yahoo.com, yahoo.co.in, hotmail.com, outlook.com, live.com, rediffmail.com,
+                           icloud.com, protonmail.com, aol.com, ymail.com]
+  memorisation:
+    ngram_words: 12               # a 12-word run copied from training text is a verbatim reproduction
+    flag_run_words: 25            # a run this long from one other issuer's training text is flagged as leakage
+                                  # (wording found in two or more issuers' documents is boilerplate and ignored)
+
+safety:
+  refuse: [jailbreak, system_prompt_extraction, financial_crime, harmful, data_exfiltration]
+  sanitize: [prompt_injection]    # an instruction inside a document is removed from the evidence, not refused
+  escalate: [financial_crime, data_exfiltration]   # also opens an incident for a human reviewer
+  system_prompt_leak_chars: 60    # a run this long from a system prompt in an output is a leak
+
+bias:
+  window_words: 8                 # a protected attribute and a judgement word this close together are flagged
+  max_refusal_gap: 0.0            # counterfactual variants must be refused (or answered) alike
+  max_length_ratio: 1.5           # longest / shortest answer across counterfactual variants
+  neutralise_person_judgement: true   # "Is X capable / fit / a good MD?" -> one factual question for every person
+
+audit:
+  path: workspace/audit/rai_audit.jsonl
+  incidents_path: workspace/audit/incidents.jsonl
+  store_text: redacted_preview    # none | redacted_preview (first 300 characters, PII redacted); raw text is never stored
+  preview_chars: 300
+  mlflow: false                   # log evaluation results to MLflow when installed and true
+
+evaluation:
+  report: docs/RAI_EVAL_REPORT.md
+  results: evaluate/out/rai_eval.json

@@ -13,6 +13,7 @@ import os
 import sys
 import tempfile
 import threading
+from pathlib import Path
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
@@ -48,6 +49,76 @@ EXEC = ThreadPoolExecutor(max_workers=2)
 JOBS: dict[str, dict] = {}
 JOBS_LOCK = threading.Lock()
 idle.watch(lambda: any(j["status"] == "running" for j in list(JOBS.values())))   # auto-stop on a RunPod pod
+
+
+def _boot_count():
+    """How many times the app has started on this workspace. On a RunPod pod the workspace is a network volume, so the
+    number keeps counting across pod stops and replacements; on a disk that is wiped it would start again at 1."""
+    p = os.path.join(store.ROOT, ".boot_count")
+    try:
+        n = int(open(p).read().strip() or 0) + 1
+    except (OSError, ValueError):
+        n = 1
+    try:
+        open(p, "w").write(str(n))
+    except OSError:
+        pass
+    return n
+
+
+BOOT_COUNT = _boot_count()
+
+
+def _guard_build():
+    """A short hash of the guard's source (draft writer, checks, figure rules): shows which guard a deployed app runs."""
+    import hashlib
+    root = Path(__file__).resolve().parents[1]
+    h = hashlib.sha256()
+    for rel in ("draft/writer.py", "verify/checks.py", "data/facts.py"):
+        try:
+            h.update((root / rel).read_bytes().replace(b"\r\n", b"\n"))
+        except OSError:
+            h.update(rel.encode())
+    return h.hexdigest()[:12]
+
+
+GUARD_BUILD = _guard_build()
+
+
+def _commit():
+    """The git commit the running code comes from: BUILD_INFO.json in a deployed bundle (serve/pod.py), else git here.
+    A trailing "+N" counts files that differed from the commit when the bundle was made."""
+    root = Path(__file__).resolve().parents[1]
+    try:
+        info = json.loads((root / "BUILD_INFO.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        import subprocess
+        try:
+            run = lambda *a: subprocess.run(["git", *a], cwd=root, capture_output=True, text=True, timeout=5).stdout.strip()  # noqa: E731
+            info = {"commit": run("rev-parse", "HEAD"), "dirty": len(run("status", "--porcelain").splitlines())}
+        except (OSError, subprocess.SubprocessError):
+            return "unknown"
+    c = (info.get("commit") or "unknown")[:12]
+    return c + (f"+{info['dirty']}" if info.get("dirty") else "")
+
+
+COMMIT = _commit()
+
+
+@app.get("/healthz")
+def healthz():
+    """Open to anyone, counts only: lets the launcher, the owner and the tests see that the app is up, that the
+    auto-stop clock is running, and that the workspace survived (boot count, number of projects)."""
+    return {"ok": True, "boot_count": BOOT_COUNT, "projects": len(store.list_projects()),
+            "idle_seconds": round(idle.idle_for(busy=any(j["status"] == "running" for j in list(JOBS.values())))),
+            "idle_limit_minutes": idle.minutes(), "guard_build": GUARD_BUILD, "rai": _rai_status(), "commit": COMMIT}
+
+
+def _rai_status():
+    """Policy version and mode of the Responsible AI layer the assistant runs (rai/), or "off" if it did not load."""
+    from rag.agent import _rai
+    r = _rai()
+    return f"{r.config.get('version')}:{r.mode}" if r is not None else "off"
 MAX_UPLOAD_MB = 200
 
 
@@ -321,6 +392,27 @@ def delete_file(pid: str, fid: str):
     return {"ok": True}
 
 
+@app.post("/api/projects/{pid}/files/clear-queue")
+def clear_queue(pid: str):
+    """Reset an upload: remove the files that were never read (queued) or could not be read (failed), with their stored
+    copies. Files already read stay. Refused while a processing run is going; cancel it first."""
+    if _active_job(pid, "process"):
+        raise HTTPException(409, "cancel the processing run first")
+    with store.LOCK:
+        p = _project(pid)
+        gone = [f for f in p["files"] if f.get("status") in ("queued", "failed", "processing")]
+        for f in gone:
+            try:
+                os.remove(store.file_path(pid, f))
+            except OSError:
+                pass
+        ids = {f["id"] for f in gone}
+        p["files"] = [x for x in p["files"] if x["id"] not in ids]
+        store.save_project(p)
+        store.save_facts(pid, [x for x in store.get_facts(pid) if x.get("file_id") not in ids])
+    return {"removed": len(gone)}
+
+
 class ProcessIn(BaseModel):
     file_ids: list[str] | None = None
     force: bool = False
@@ -505,6 +597,7 @@ def sections(pid: str):
         v = (d or {}).get("verification") or {}
         out.append({**s, "status": "drafted" if d else "not_started", "engine": (d or {}).get("engine"),
                     "updated_at": (d or {}).get("updated_at"), "edited": (d or {}).get("edited", False),
+                    "version": (d or {}).get("version"), "versions": len(store.get_versions(pid, s["key"])) if d else 0,
                     "placeholders": v.get("placeholders"), "ungrounded": len(v.get("ungrounded", [])) if d else None,
                     "checklist_coverage": v.get("checklist_coverage"), "grounding": v.get("grounding"),
                     "weak": len(v.get("weak", [])) if d else None, "narrative_pending": v.get("narrative_pending"),
@@ -517,7 +610,41 @@ def section(pid: str, key: str):
     _project(pid)
     if key not in SECTION_BY_KEY:
         raise HTTPException(404, "unknown section")
-    return {"section": SECTION_BY_KEY[key], "draft": store.get_drafts(pid).get(key)}
+    return {"section": SECTION_BY_KEY[key], "draft": store.get_drafts(pid).get(key), "versions": _version_list(pid, key)}
+
+
+def _version_list(pid, key):
+    out = []
+    for v in store.get_versions(pid, key):
+        d = v["draft"]
+        ver = d.get("verification") or {}
+        out.append({"n": v["n"], "created_at": v.get("created_at"), "engine": d.get("engine"), "edited": d.get("edited", False),
+                    "model_name": d.get("model_name"), "words": sum(len((b.get("text") or "").split()) for b in d.get("blocks", [])),
+                    "placeholders": ver.get("placeholders"), "ungrounded": len(ver.get("ungrounded", [])),
+                    "review": (d.get("review") or {}).get("status", "unreviewed"),
+                    "selected": v["n"] == (store.get_drafts(pid).get(key) or {}).get("version")})
+    return out
+
+
+class VersionIn(BaseModel):
+    version: int
+
+
+@app.post("/api/projects/{pid}/sections/{key}/select")
+def select_draft_version(pid: str, key: str, body: VersionIn):
+    _project(pid)
+    d = store.select_version(pid, key, body.version)
+    if d is None:
+        raise HTTPException(404, "no such draft version")
+    return {"section": SECTION_BY_KEY[key], "draft": d, "versions": _version_list(pid, key)}
+
+
+@app.delete("/api/projects/{pid}/sections/{key}/versions/{n}")
+def delete_draft_version(pid: str, key: str, n: int):
+    _project(pid)
+    if not store.delete_version(pid, key, n):
+        raise HTTPException(422, "cannot delete the only draft, or it does not exist")
+    return {"section": SECTION_BY_KEY[key], "draft": store.get_drafts(pid).get(key), "versions": _version_list(pid, key)}
 
 
 class DraftIn(BaseModel):
@@ -533,7 +660,7 @@ def _draft_one(pid, key, settings, ctx):
     d["updated_at"] = store.now()
     d["edited"] = False
     d["model_name"] = settings["model_name"] if d["engine"] == "model" else None
-    store.save_draft(pid, key, d)
+    store.save_draft(pid, key, d, new_version=True)      # a redraft is Draft N+1; the earlier drafts stay
     return d
 
 
@@ -644,7 +771,8 @@ def cancel(job_id: str):
     if not j:
         raise HTTPException(404, "job not found")
     j["cancel"] = True
-    j["message"] = "Cancelling…"
+    j["message"] = ("Cancelling: stops after the file being read" if j.get("kind") == "process"
+                    else "Cancelling: stops after the section being drafted")
     return _public(j)
 
 

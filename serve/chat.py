@@ -92,4 +92,5 @@ def respond(pid, ctx, question, history, settings, review, drafts, actions):
         yield {"type": "done"}
         return
     agent = Agent(ctx, project_index(pid, ctx), review, drafts)
+    agent.tenant = pid
     yield from agent.run(question, history, settings)

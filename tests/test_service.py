@@ -146,7 +146,8 @@ def test_agentic_rag_offline(sample_files):
     steps = [e for e in evs if e["type"] == "step"]
     text = "".join(e["text"] for e in evs if e["type"] == "delta")
     meta = next(e for e in evs if e["type"] == "meta")
-    assert steps[0]["label"] == "Planning" and steps[-1]["label"] == "Checking the answer"
+    labels = [s["label"] for s in steps]                 # the Responsible AI check (rai/) runs after the answer check
+    assert labels[0] == "Planning" and labels[-2:] == ["Checking the answer", "Responsible AI"]
     assert "[1]" in text or "[2]" in text
     assert any(s["file_name"] == "01_Litigation_Certificate_Legal_Counsel.pdf" for s in meta["sources"])
 
@@ -279,3 +280,108 @@ def test_api_end_to_end(sample_files):
     assert "RISK FACTORS" in text and "ANNEXURE — REVIEW PACK" in text
     assert c.get(f"/api/projects/{pid}/settings").status_code == 404
     assert c.delete(f"/api/projects/{pid}").json()["ok"]
+
+
+def test_a_long_address_is_not_cut_to_twelve_words():
+    from extract.rules import infer_type
+    addr = "2nd Floor, Sai Prasad Chambers, Plot No. 18, Ramdaspeth, Nagpur - 440 010, Maharashtra"
+    assert infer_type(addr) == ("short_text", addr, "")
+
+
+def test_review_flags_a_listing_platform_the_files_contradict():
+    from verify.checks import platform_issue
+    facts = [{"value": "Proposed listing NSE Emerge", "snippet": ""}, {"value": "x", "snippet": "listed on the NSE Emerge platform"}]
+    got = platform_issue({"offer": {"board": "bse_sme"}}, facts)
+    assert got["severity"] == "high" and got["suggest"] == "nse_emerge"
+    assert platform_issue({"offer": {"board": "nse_emerge"}}, facts) is None
+
+
+def test_an_organisation_no_issuer_file_names_is_masked_but_known_and_standard_names_stay():
+    import re
+    from verify.checks import mask_unknown_entities
+
+    corpus = re.sub(r"[^a-z0-9]", "", "The loan is from Pranavati Bank Limited. VIDYUNMAYAINFRAPROJECTSLIMITED is the issuer.".lower())
+    text = ("We serve BSES Rajdhani Power Limited (BSES) and Pranavati Bank Limited. Vidyunmaya Infraprojects Limited "
+            "will list with BSE Limited.")
+    out, hits = mask_unknown_entities(text, corpus)
+    assert [h["raw"] for h in hits] == ["BSES Rajdhani Power Limited"]
+    assert out.startswith("We serve [●] and Pranavati Bank Limited.") and "BSE Limited" in out
+
+
+def test_each_redraft_is_a_new_numbered_draft_and_the_user_picks_the_best():
+    from serve import store
+
+    pid = store.create_project("Versions Ltd")["id"]
+    mk = lambda txt: {"blocks": [{"type": "paragraph", "text": txt}], "engine": "model", "updated_at": store.now(),  # noqa: E731
+                      "verification": {"placeholders": 1}, "review": {"status": "unreviewed"}}
+    store.save_draft(pid, "business", mk("first"), new_version=True)
+    store.save_draft(pid, "business", mk("second"), new_version=True)
+    store.save_draft(pid, "business", mk("third"), new_version=True)
+    assert [v["n"] for v in store.get_versions(pid, "business")] == [1, 2, 3]
+    assert store.get_drafts(pid)["business"]["blocks"][0]["text"] == "third"      # the newest is selected
+    got = store.select_version(pid, "business", 2)
+    assert got["blocks"][0]["text"] == "second" and store.get_drafts(pid)["business"]["version"] == 2
+    # an edit or sign-off changes the selected draft only
+    cur = store.get_drafts(pid)["business"]
+    cur["review"] = {"status": "reviewed", "by": "R"}
+    store.save_draft(pid, "business", cur)
+    vs = {v["n"]: v["draft"] for v in store.get_versions(pid, "business")}
+    assert vs[2]["review"]["status"] == "reviewed" and vs[3]["review"]["status"] == "unreviewed"
+    assert store.delete_version(pid, "business", 3) is True
+    assert [v["n"] for v in store.get_versions(pid, "business")] == [1, 2]
+    store.save_draft(pid, "business", mk("fourth"), new_version=True)
+    assert store.get_drafts(pid)["business"]["version"] == 3                       # the next number after the highest one left
+    store.save_draft(pid, "business", None)
+    assert store.get_versions(pid, "business") == [] and "business" not in store.get_drafts(pid)
+
+
+def test_version_endpoints_list_select_and_refuse_to_delete_the_last_draft():
+    from fastapi.testclient import TestClient
+
+    from serve import store
+    from serve.app import app
+
+    pid = store.create_project("Versions API Ltd")["id"]
+    d = {"blocks": [{"type": "paragraph", "text": "a"}], "engine": "template", "updated_at": store.now(), "review": {"status": "unreviewed"}}
+    store.save_draft(pid, "definitions", dict(d), new_version=True)
+    store.save_draft(pid, "definitions", {**d, "blocks": [{"type": "paragraph", "text": "b"}]}, new_version=True)
+    c = TestClient(app)
+    got = c.get(f"/api/projects/{pid}/sections/definitions").json()
+    assert [v["n"] for v in got["versions"]] == [1, 2] and got["versions"][1]["selected"] is True
+    row = next(s for s in c.get(f"/api/projects/{pid}/sections").json() if s["key"] == "definitions")
+    assert row["versions"] == 2 and row["version"] == 2
+    r = c.post(f"/api/projects/{pid}/sections/definitions/select", json={"version": 1}).json()
+    assert r["draft"]["blocks"][0]["text"] == "a" and r["versions"][0]["selected"] is True
+    assert c.post(f"/api/projects/{pid}/sections/definitions/select", json={"version": 9}).status_code == 404
+    assert c.delete(f"/api/projects/{pid}/sections/definitions/versions/2").status_code == 200
+    assert c.delete(f"/api/projects/{pid}/sections/definitions/versions/1").status_code == 422     # the last one stays
+
+
+def test_only_the_last_three_drafts_of_a_section_are_kept():
+    from serve import store
+
+    pid = store.create_project("Cap Ltd")["id"]
+    for i in range(1, 6):
+        store.save_draft(pid, "business", {"blocks": [{"type": "paragraph", "text": f"draft {i}"}], "engine": "model",
+                                           "updated_at": store.now(), "review": {"status": "unreviewed"}}, new_version=True)
+    assert [v["n"] for v in store.get_versions(pid, "business")] == [3, 4, 5]
+    assert store.get_drafts(pid)["business"]["blocks"][0]["text"] == "draft 5"
+
+
+def test_clear_queue_removes_unread_files_only_and_not_during_a_run():
+    from fastapi.testclient import TestClient
+
+    from serve import app as appmod
+    from serve import store
+
+    pid = store.create_project("Reset Ltd")["id"]
+    c = TestClient(appmod.app)
+    files = [("files", ("a.txt", b"alpha", "text/plain")), ("files", ("b.txt", b"beta", "text/plain"))]
+    added = c.post(f"/api/projects/{pid}/files", files=files).json()["added"]
+    store.update_file(pid, added[0]["id"], status="processed")          # one file was read, one never was
+    appmod.JOBS["jx"] = {"id": "jx", "project_id": pid, "kind": "process", "status": "running", "cancel": False}
+    assert c.post(f"/api/projects/{pid}/files/clear-queue").status_code == 409          # cancel the run first
+    appmod.JOBS.pop("jx")
+    assert c.post(f"/api/projects/{pid}/files/clear-queue").json() == {"removed": 1}
+    left = store.get_project(pid)["files"]
+    assert [f["name"] for f in left] == ["a.txt"] and left[0]["status"] == "processed"
