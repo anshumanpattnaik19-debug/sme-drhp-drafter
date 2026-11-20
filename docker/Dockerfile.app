@@ -27,7 +27,11 @@ COPY verify/ verify/
 COPY rag/ rag/
 COPY data/ data/
 COPY teacher/ teacher/
+COPY rai/ rai/
 COPY --from=ui /ui/dist ui/dist
+# the commit the image is built from, shown by /healthz:  --build-arg GIT_COMMIT=$(git rev-parse HEAD)
+ARG GIT_COMMIT=unknown
+RUN printf '{"commit": "%s", "dirty": 0}' "$GIT_COMMIT" > BUILD_INFO.json
 RUN mkdir -p /app/workspace
 EXPOSE 8765
 CMD ["python", "-m", "uvicorn", "serve.app:app", "--host", "0.0.0.0", "--port", "8765"]

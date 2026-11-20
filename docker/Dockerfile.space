@@ -27,7 +27,11 @@ COPY verify/ verify/
 COPY rag/ rag/
 COPY data/ data/
 COPY teacher/ teacher/
+COPY rai/ rai/
 COPY --from=ui /ui/dist ui/dist
+# the commit the image is built from, shown by /healthz:  --build-arg GIT_COMMIT=$(git rev-parse HEAD)
+ARG GIT_COMMIT=unknown
+RUN printf '{"commit": "%s", "dirty": 0}' "$GIT_COMMIT" > BUILD_INFO.json
 # Spaces run the container as user 1000; the workspace (uploads, drafts) is not persistent across restarts
 RUN mkdir -p /app/workspace && chown -R 1000:1000 /app/workspace
 USER 1000
