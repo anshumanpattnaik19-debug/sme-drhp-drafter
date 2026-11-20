@@ -8,6 +8,7 @@ import { useToast } from "../components/ui";
 interface AppState {
   meta: Meta | null;
   health: Health | null;
+  healthChecked: boolean;      // false until the first answer or failure: the header says "Checking" rather than "offline"
   refreshHealth: () => void;
   settingsOpen: boolean;
   openSettings: (open?: boolean) => void;
@@ -20,11 +21,12 @@ const AppCtx = createContext<AppState>(null as unknown as AppState);
 export function AppProvider({ children }: { children: ReactNode }) {
   const [meta, setMeta] = useState<Meta | null>(null);
   const [health, setHealth] = useState<Health | null>(null);
+  const [healthChecked, setHealthChecked] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [theme, setTheme] = useState<"light" | "dark">(() => (document.documentElement.classList.contains("dark") ? "dark" : "light"));
 
   const refreshHealth = useCallback(() => {
-    api.health().then(setHealth).catch(() => setHealth(null));
+    api.health().then(setHealth).catch(() => setHealth(null)).finally(() => setHealthChecked(true));
   }, []);
 
   useEffect(() => {
@@ -44,7 +46,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <AppCtx.Provider value={{ meta, health, refreshHealth, settingsOpen, openSettings: (o = true) => setSettingsOpen(o), theme, toggleTheme }}>
+    <AppCtx.Provider value={{ meta, health, healthChecked, refreshHealth, settingsOpen, openSettings: (o = true) => setSettingsOpen(o), theme, toggleTheme }}>
       {children}
     </AppCtx.Provider>
   );

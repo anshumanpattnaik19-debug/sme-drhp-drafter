@@ -1,5 +1,5 @@
 import { Navigate, Route, Routes, useParams } from "react-router-dom";
-import { TopBar } from "./components/TopBar";
+import { ConnectionBanner, TopBar } from "./components/TopBar";
 import { ProjectShell } from "./components/ProjectShell";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { ProjectProvider } from "./lib/state";
@@ -46,6 +46,7 @@ export default function App() {
         Skip to content
       </a>
       <TopBar />
+      <ConnectionBanner />
       <div className="min-h-0 flex-1">
         <Routes>
           <Route path="/" element={<Navigate to="/projects" replace />} />

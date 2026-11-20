@@ -1,6 +1,6 @@
 """Host the drafting model on a RunPod Serverless endpoint that is billed only while a worker runs (docs/RUNPOD.md).
 
-    python -m serve.runpod upload     # the A_qa_dpo adapter -> a private Hugging Face repo        (needs HF_TOKEN)
+    python -m serve.runpod upload     # the current adapter -> a private Hugging Face repo        (needs HF_TOKEN)
     python -m serve.runpod create     # vLLM endpoint: base + adapter, no always-on workers        (RUNPOD_API_KEY, HF_TOKEN)
     python -m serve.runpod check      # the app's own calls against it: models, drafting, extraction, streaming
     python -m serve.runpod smoke      # the whole app against it: upload issuer files, process, draft a section
@@ -85,7 +85,7 @@ def upload(args):
     api = HfApi(token=key("HF_TOKEN"))
     repo_id = args.repo if "/" in args.repo else f"{api.whoami()['name']}/{args.repo}"
     api.create_repo(repo_id, private=True, exist_ok=True)
-    api.upload_folder(repo_id=repo_id, folder_path=str(ADAPTER), commit_message="A_qa_dpo adapter")
+    api.upload_folder(repo_id=repo_id, folder_path=str(ADAPTER), commit_message="A_qa3_dpo3 adapter")
     save_state(adapter_repo=repo_id)
     print(f"adapter uploaded to the private repo {repo_id} ({sum(f.stat().st_size for f in ADAPTER.iterdir()) // 2**20} MB)")
 
@@ -115,7 +115,7 @@ def pick_pools(gpus):
 
 
 def endpoint_body(pools, repo_id, args):
-    env = {"MODEL_NAME": BASE, "MAX_MODEL_LEN": "6144", "GPU_MEMORY_UTILIZATION": "0.9",
+    env = {"MODEL_NAME": BASE, "MAX_MODEL_LEN": "32768", "GPU_MEMORY_UTILIZATION": "0.9",
            "ENABLE_LORA": "true", "MAX_LORA_RANK": "16", "MAX_LORAS": "1",
            # one JSON object, not a list: vLLM 0.32 parses each --lora-modules value as a single object (a list, as
            # RunPod's worker docs show, makes `vllm serve` exit with code 2)

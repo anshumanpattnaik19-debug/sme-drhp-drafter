@@ -294,7 +294,7 @@ export function Drawer({ open, onClose, children, width = "w-[min(860px,92vw)]" 
 
 export function Tabs<T extends string>({ value, onChange, tabs, className }: { value: T; onChange: (v: T) => void; tabs: { value: T; label: ReactNode; count?: number }[]; className?: string }) {
   return (
-    <div className={cn("flex items-center gap-1 border-b border-border", className)} role="tablist">
+    <div className={cn("scroll-thin flex items-center gap-1 overflow-x-auto border-b border-border", className)} role="tablist">
       {tabs.map((t) => (
         <button
           key={t.value}

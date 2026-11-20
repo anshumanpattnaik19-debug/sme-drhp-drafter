@@ -1,4 +1,4 @@
-"""DRHP Studio desktop launcher: starts the app on this computer and opens it in the browser.
+"""DRHP Copilot desktop launcher: starts the app on this computer and opens it in the browser.
 
 Everything runs locally: the API, the UI, OCR and the rule-based extraction. Issuer files and project data stay in
 the user's data folder (LOCALAPPDATA/DRHP Studio/workspace). The drafting model is optional: set a local

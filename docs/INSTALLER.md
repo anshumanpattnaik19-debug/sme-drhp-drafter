@@ -1,11 +1,13 @@
-# Installing DRHP Studio on Windows
+# Installing DRHP Copilot on Windows
 
-DRHP Studio runs entirely on the user's computer. Issuer files are read, OCR'd and indexed locally, and stored in
+> The app is called DRHP Copilot (renamed from DRHP Studio on 19 Nov 2026). The data folder keeps the old name, `DRHP Studio`, so projects of earlier installs are found without a move.
+
+DRHP Copilot runs entirely on the user's computer. Issuer files are read, OCR'd and indexed locally, and stored in
 `%LOCALAPPDATA%\DRHP Studio\workspace`. The installer does not need administrator rights.
 
 ## What the installer contains
 
-- The DRHP Studio backend (FastAPI) and the built React UI.
+- The DRHP Copilot backend (FastAPI) and the built React UI.
 - Python runtime and libraries: PyMuPDF, python-docx, openpyxl, and RapidOCR (OCR models included, no download).
 - A launcher that starts the app on `http://127.0.0.1:8765` and opens it in the default browser.
 
@@ -53,5 +55,19 @@ separately in **Settings**:
 
 ## Status
 
-The installer script and the launcher are written. The frozen build and the `.exe` installer were not verified
-at the time of writing; this section is updated after those steps run.
+Verified on 15 November 2026 on the developer's Windows laptop (AMD graphics, 15 GB RAM):
+
+- The frozen build (`DRHPStudio.exe`, 305 MB) starts and answers `/api/health` with OCR available.
+- The installer (`DRHPStudio-Setup-1.0.0.exe`, 101 MB) installs silently for the current user, with no administrator
+  rights, to `%LOCALAPPDATA%\Programs\DRHP Studio`.
+- The installed app passes the smoke test in `vm/docker_smoke.py`: six issuer files uploaded and processed (739 facts),
+  and a section drafted with the offline drafter.
+
+Build notes from this run:
+
+- PyInstaller resolves `--add-data` paths from the spec folder, so the build uses absolute paths.
+- The `rag` package imports `sentence_transformers` (optional dense retrieval, inside a try block). Collecting `rag`
+  pulls in torch, torchvision and datasets unless those modules are excluded. The build excludes them; the app falls
+  back to its lexical retrieval.
+- A running copy of the app locks its files, so the old frozen folder cannot be deleted while it runs. Stop the app
+  before rebuilding.

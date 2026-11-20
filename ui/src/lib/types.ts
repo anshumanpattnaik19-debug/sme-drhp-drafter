@@ -129,7 +129,22 @@ export interface SignOff {
   note?: string;
 }
 
+export interface DraftVersion {
+  n: number;
+  created_at: string | null;
+  engine: string | null;
+  edited: boolean;
+  model_name?: string | null;
+  words: number;
+  placeholders: number | null;
+  ungrounded: number;
+  review: "reviewed" | "unreviewed" | string;
+  selected: boolean;
+}
+
 export interface SectionRow extends SectionDef {
+  version?: number | null;
+  versions?: number;
   status: "drafted" | "not_started";
   engine: string | null;
   updated_at: string | null;
@@ -179,6 +194,7 @@ export interface Verification {
 }
 
 export interface Draft {
+  version?: number;
   blocks: DraftBlock[];
   writer: Writer;
   engine: string;
@@ -257,7 +273,7 @@ export interface Health {
   status: string;
   ocr_available: boolean;
   use_model: boolean;
-  model: { reachable: boolean | null; models?: string[]; latency_ms?: number | null; error?: string | null };
+  model: { reachable: boolean | null; models?: string[]; latency_ms?: number | null; serverless?: boolean; workers_running?: number; error?: string | null };
   model_name: string;
   model_url: string;
 }
@@ -269,4 +285,10 @@ export interface Meta {
   writers: Record<Writer, string>;
   sections: SectionDef[];
   formats: string[];
+}
+
+export interface SectionData {
+  section: SectionDef;
+  draft: Draft | null;
+  versions: DraftVersion[];
 }

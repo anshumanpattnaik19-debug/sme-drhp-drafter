@@ -19,10 +19,10 @@ function JobCard() {
       <div className="flex items-center gap-2">
         {running ? <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" /> : <span className="h-2 w-2 rounded-full bg-success" />}
         <span className="flex-1 truncate text-xs font-semibold text-fg">{job.label}</span>
-        {running && (
-          <button onClick={cancelJob} className="text-fg-subtle hover:text-danger" aria-label="Cancel job" title="Cancel">
-            <X className="h-3.5 w-3.5" />
-          </button>
+        {running && !job.message.startsWith("Cancelling") && (
+          <Button size="sm" variant="secondary" className="h-6 px-2 text-2xs text-danger" icon={<X className="h-3 w-3" />} onClick={cancelJob} aria-label="Cancel this run">
+            Cancel
+          </Button>
         )}
       </div>
       <Progress value={running ? Math.max(frac, 0.03) : 1} className="mt-2.5" tone={running ? "primary" : "success"} />
@@ -43,6 +43,7 @@ export function ProjectShell({ children }: { children: ReactNode }) {
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "j") { e.preventDefault(); setPanel((p) => !p); }
+      if (e.key === "Escape") setPanel(false);
     };
     window.addEventListener("keydown", h);
     return () => window.removeEventListener("keydown", h);
@@ -150,5 +151,5 @@ export function ProjectShell({ children }: { children: ReactNode }) {
 }
 
 export function Page({ children, className }: { children: ReactNode; className?: string }) {
-  return <div className={cn("mx-auto w-full max-w-[1240px] px-8 py-7", className)}>{children}</div>;
+  return <div className={cn("mx-auto w-full max-w-[1240px] px-8 pb-24 pt-7", className)}>{children}</div>;
 }

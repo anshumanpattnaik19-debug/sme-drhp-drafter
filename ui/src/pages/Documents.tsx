@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState, type DragEvent } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
-  ChevronDown, FileStack, FolderUp, MoreHorizontal, Play, RefreshCw, Search, Trash2, UploadCloud, Eye, FilePlus2,
+  ChevronDown, FileStack, FolderUp, MoreHorizontal, Play, RefreshCw, Search, Trash2, UploadCloud, Eye, FilePlus2, X,
 } from "lucide-react";
 import { api } from "../lib/api";
 import { useApp, useProject } from "../lib/state";
@@ -33,27 +33,28 @@ async function walkEntry(entry: FileSystemEntry, prefix = ""): Promise<Pending[]
   return [];
 }
 
-function uploadWithProgress(pid: string, items: Pending[], onProgress: (f: number) => void) {
+function uploadWithProgress(pid: string, items: Pending[], onProgress: (f: number) => void, xhr: XMLHttpRequest) {
   return new Promise<{ added: IssuerFile[]; rejected: { name: string; reason: string }[] }>((resolve, reject) => {
     const fd = new FormData();
     items.forEach(({ file, path }) => { fd.append("files", file, file.name); fd.append("paths", path); });
-    const xhr = new XMLHttpRequest();
     xhr.open("POST", `/api/projects/${pid}/files`);
     xhr.upload.onprogress = (e) => e.lengthComputable && onProgress(e.loaded / e.total);
     xhr.onload = () => (xhr.status < 300 ? resolve(JSON.parse(xhr.responseText)) : reject(new Error(xhr.responseText || xhr.statusText)));
     xhr.onerror = () => reject(new Error("Upload failed: the drafting service did not respond."));
+    xhr.onabort = () => reject(new Error("cancelled"));
     xhr.send(fd);
   });
 }
 
 export default function DocumentsPage() {
-  const { project, refresh, startJob, job } = useProject();
+  const { project, refresh, startJob, job, cancelJob } = useProject();
   const { meta, health } = useApp();
   const toast = useToast();
   const [params, setParams] = useSearchParams();
   const openFid = params.get("file");
   const [drag, setDrag] = useState(false);
   const [upload, setUpload] = useState<{ n: number; frac: number } | null>(null);
+  const uploadXhr = useRef<XMLHttpRequest | null>(null);
   const [auto, setAuto] = useState(true);
   const [q, setQ] = useState("");
   const [status, setStatus] = useState<"all" | "attention" | "queued">("all");
@@ -75,8 +76,10 @@ export default function DocumentsPage() {
       return;
     }
     setUpload({ n: ok.length, frac: 0 });
+    const xhr = new XMLHttpRequest();
+    uploadXhr.current = xhr;
     try {
-      const res = await uploadWithProgress(pid, ok, (frac) => setUpload({ n: ok.length, frac }));
+      const res = await uploadWithProgress(pid, ok, (frac) => setUpload({ n: ok.length, frac }), xhr);
       await refresh();
       const rej = res.rejected.length + skipped;
       toast("success", `Uploaded ${res.added.length} file${res.added.length === 1 ? "" : "s"}`, rej ? `${rej} skipped (unsupported type or too large)` : undefined);
@@ -84,8 +87,10 @@ export default function DocumentsPage() {
         try { startJob(await api.process(pid, { file_ids: res.added.map((f) => f.id) })); } catch (e) { toast("error", "Could not start processing", (e as Error).message); }
       }
     } catch (e) {
-      toast("error", "Upload failed", (e as Error).message);
+      if ((e as Error).message === "cancelled") toast("info", "Upload cancelled", "Nothing from this batch was kept.");
+      else toast("error", "Upload failed", (e as Error).message);
     } finally {
+      uploadXhr.current = null;
       setUpload(null);
     }
   };
@@ -136,8 +141,17 @@ export default function DocumentsPage() {
             <>
               <Menu
                 trigger={<Button variant="secondary" icon={<MoreHorizontal className="h-4 w-4" />}>More</Button>}
-                items={[{ label: "Reprocess all files", icon: <RefreshCw />, onClick: () => processAll(true), disabled: processing }]}
+                items={[
+                  { label: "Reprocess all files", icon: <RefreshCw />, onClick: () => processAll(true), disabled: processing },
+                  { label: "Remove files not yet read", icon: <Trash2 />, danger: true, disabled: processing || !project?.files.some((f) => f.status !== "processed"),
+                    onClick: async () => {
+                      if (!window.confirm("Remove every file that has not been read yet (queued or failed)? Files already read stay.")) return;
+                      try { const r = await api.clearQueue(pid); await refresh(); toast("success", `Removed ${r.removed} file(s)`, "Upload them again whenever you like."); }
+                      catch (e) { toast("error", "Could not clear the queue", (e as Error).message); }
+                    } },
+                ]}
               />
+              {processing && <Button variant="secondary" className="text-danger" icon={<X className="h-4 w-4" />} onClick={cancelJob}>Cancel processing</Button>}
               <Button variant="primary" icon={<Play className="h-4 w-4" />} onClick={() => processAll(false)} disabled={!queued.length || processing} loading={processing}>
                 {processing ? "Processing…" : queued.length ? `Process ${queued.length} file${queued.length > 1 ? "s" : ""}` : "All processed"}
               </Button>
@@ -156,7 +170,7 @@ export default function DocumentsPage() {
           files.length ? "px-6 py-5" : "px-6 py-14",
         )}
       >
-        <div className={cn("flex items-center gap-5", files.length ? "flex-row" : "flex-col text-center")}>
+        <div className={cn("flex gap-5", files.length ? "flex-col items-start sm:flex-row sm:items-center" : "flex-col items-center text-center")}>
           <div className={cn("flex shrink-0 items-center justify-center rounded-xl bg-primary-soft text-primary", files.length ? "h-11 w-11" : "h-14 w-14")}>
             <UploadCloud className={files.length ? "h-5 w-5" : "h-6 w-6"} />
           </div>
@@ -170,7 +184,8 @@ export default function DocumentsPage() {
               </div>
             )}
           </div>
-          <div className={cn("flex items-center gap-2", !files.length && "mt-1")}>
+          <div className={cn("flex flex-wrap items-center gap-2", !files.length && "mt-1")}>
+            {upload && <Button variant="secondary" className="text-danger" icon={<X className="h-4 w-4" />} onClick={() => uploadXhr.current?.abort()}>Cancel upload</Button>}
             <Button icon={<FilePlus2 className="h-4 w-4" />} onClick={() => filesInput.current?.click()} disabled={!!upload}>Add files</Button>
             <Button icon={<FolderUp className="h-4 w-4" />} onClick={() => folderInput.current?.click()} disabled={!!upload}>Add folder</Button>
           </div>

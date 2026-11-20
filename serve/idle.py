@@ -13,7 +13,7 @@ import time
 
 import httpx
 
-IGNORED = ("/api/health", "/login", "/favicon.svg")
+IGNORED = ("/api/health", "/login", "/favicon.svg", "/healthz")
 _last = time.time()
 
 
@@ -26,8 +26,8 @@ def minutes():
 
 async def touch(request, call_next):
     global _last
-    if request.url.path not in IGNORED:
-        _last = time.time()
+    if request.url.path not in IGNORED or (request.url.path == "/login" and request.method == "POST"):
+        _last = time.time()               # a sign-in is use; opening the sign-in page is not
     return await call_next(request)
 
 

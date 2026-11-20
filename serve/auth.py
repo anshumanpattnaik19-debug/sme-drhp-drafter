@@ -23,7 +23,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 COOKIE = "drhp_session"
 MAX_AGE = 12 * 3600
 MAX_FAILS, WINDOW = 5, 600                  # 5 wrong passwords per client in 10 minutes, then 429 until the window ends
-OPEN = ("/login", "/logout", "/favicon.svg")
+OPEN = ("/login", "/logout", "/favicon.svg", "/healthz")
 
 _fails: dict[str, list[float]] = {}
 _lock = threading.Lock()
@@ -79,7 +79,7 @@ def _secure(request):
 
 
 PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>DRHP Studio · sign in</title><style>
+<title>DRHP Copilot · sign in</title><style>
 :root{{color-scheme:light dark;--bg:#f6f7f9;--card:#fff;--text:#111827;--muted:#6b7280;--line:#d1d5db;--accent:#4f46e5;--err:#b91c1c}}
 @media (prefers-color-scheme:dark){{:root{{--bg:#0f1115;--card:#171a21;--text:#e5e7eb;--muted:#9ca3af;--line:#2d333d;--accent:#818cf8;--err:#f87171}}}}
 *{{box-sizing:border-box}}body{{margin:0;min-height:100vh;display:grid;place-items:center;background:var(--bg);color:var(--text);
@@ -89,7 +89,7 @@ h1{{font-size:18px;margin:0 0 4px}}p{{color:var(--muted);margin:0 0 20px;font-si
 label{{display:block;font-size:13px;margin-bottom:6px}}input{{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:8px;
 background:transparent;color:inherit;font:inherit}}button{{margin-top:16px;width:100%;padding:10px;border:0;border-radius:8px;
 background:var(--accent);color:#fff;font:inherit;font-weight:600;cursor:pointer}}.err{{color:var(--err);font-size:13px;margin-top:12px}}
-</style></head><body><form method="post" action="/login"><h1>DRHP Studio</h1><p>Enter the shared password to continue.</p>
+</style></head><body><form method="post" action="/login"><h1>DRHP Copilot</h1><p>Enter the shared password to continue.</p>
 <label for="pw">Password</label><input id="pw" name="password" type="password" autocomplete="current-password" autofocus required>
 <input type="hidden" name="next" value="{next}"><button type="submit">Sign in</button>{error}</form></body></html>"""
 

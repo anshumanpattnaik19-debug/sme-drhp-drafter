@@ -159,7 +159,7 @@ function AssistantMessage({ m, onRetry, onOpenSource, onAction }: {
   );
 }
 
-function Composer({ onSend, onStop, busy, compact, engine, autoFocus }: { onSend: (t: string) => void; onStop: () => void; busy: boolean; compact?: boolean; engine: string; autoFocus?: boolean }) {
+function Composer({ onSend, onStop, busy, compact, engine, autoFocus, ready = true }: { onSend: (t: string) => void; onStop: () => void; busy: boolean; compact?: boolean; engine: string; autoFocus?: boolean; ready?: boolean }) {
   const [v, setV] = useState("");
   const ref = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
@@ -168,7 +168,7 @@ function Composer({ onSend, onStop, busy, compact, engine, autoFocus }: { onSend
   }, [v, compact]);
   const send = () => {
     const t = v.trim();
-    if (!t || busy) return;
+    if (!t || busy || !ready) return;
     onSend(t);
     setV("");
   };
@@ -181,7 +181,8 @@ function Composer({ onSend, onStop, busy, compact, engine, autoFocus }: { onSend
         autoFocus={autoFocus}
         onChange={(e) => setV(e.target.value)}
         onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
-        placeholder="Ask about the issuer's files, or say “draft Our Business”…"
+        disabled={!ready}
+        placeholder={ready ? "Ask about the issuer's files, or say “draft Our Business”…" : "Loading the project…"}
         className={cn("block w-full resize-none bg-transparent px-4 pt-3.5 text-fg placeholder:text-fg-subtle focus:outline-none", compact ? "text-[14px]" : "text-[15px]")}
       />
       <div className="flex items-center justify-between gap-2 px-3 pb-2.5 pt-1.5">
@@ -193,7 +194,7 @@ function Composer({ onSend, onStop, busy, compact, engine, autoFocus }: { onSend
             <Square className="h-3 w-3 fill-current" />
           </button>
         ) : (
-          <button onClick={send} disabled={!v.trim()} aria-label="Send" className="flex h-8 w-8 items-center justify-center rounded-full bg-primary text-primary-fg transition-all hover:bg-primary/90 disabled:bg-muted disabled:text-fg-subtle">
+          <button onClick={send} disabled={!v.trim() || !ready} aria-label="Send" className="flex h-8 w-8 items-center justify-center rounded-full bg-primary text-primary-fg transition-all hover:bg-primary/90 disabled:bg-muted disabled:text-fg-subtle">
             <ArrowUp className="h-4 w-4" />
           </button>
         )}
@@ -215,7 +216,14 @@ export function AssistantChat({ variant = "page", onClose }: { variant?: "page" 
   const stick = useRef(true);
   const compact = variant === "panel";
 
-  useEffect(() => { if (pid) chatHistory(pid).then(setMsgs).catch(() => setMsgs([])); }, [pid]);
+  // The history can arrive after the user has already sent a question (a slow or busy server): keep what was typed instead of
+  // letting the late reply replace it, which made the conversation vanish.
+  useEffect(() => {
+    if (!pid) return;
+    chatHistory(pid)
+      .then((h) => setMsgs((cur) => (cur === null ? h : [...h.filter((x) => !cur.some((c) => c.id === x.id)), ...cur])))
+      .catch(() => setMsgs((cur) => cur ?? []));
+  }, [pid]);
   useEffect(() => {
     const el = scroller.current;
     if (el && stick.current) el.scrollTop = el.scrollHeight;
@@ -336,7 +344,7 @@ export function AssistantChat({ variant = "page", onClose }: { variant?: "page" 
 
       <div className={cn("shrink-0", compact ? "px-3 pb-3" : "px-6 pb-5")}>
         <div className={cn("mx-auto", !compact && "max-w-[760px]")}>
-          <Composer onSend={send} onStop={() => abort.current?.abort()} busy={busy} compact={compact} engine={engine} autoFocus={variant === "panel"} />
+          <Composer onSend={send} onStop={() => abort.current?.abort()} busy={busy} compact={compact} engine={engine} autoFocus={variant === "panel"} ready={!!pid && msgs !== null} />
           <p className="mt-2 text-center text-2xs text-fg-subtle">Answers come from the issuer's files and can be wrong or incomplete. Check the cited sources.</p>
         </div>
       </div>

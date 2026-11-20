@@ -17,9 +17,13 @@ export function Logo() {
 }
 
 export function ModelStatus() {
-  const { health, openSettings } = useApp();
+  const { health, healthChecked, openSettings } = useApp();
   let tone = "bg-fg-subtle", label = "Service offline", detail = "The drafting service is not reachable.";
-  if (health) {
+  if (!health && !healthChecked) {
+    tone = "bg-fg-subtle animate-pulse";
+    label = "Checking…";
+    detail = "Checking the drafting service.";
+  } else if (health) {
     if (!health.use_model) {
       tone = "bg-warning";
       label = "Offline mock writer";
@@ -48,6 +52,17 @@ export function ModelStatus() {
   );
 }
 
+export function ConnectionBanner() {
+  const { health, healthChecked, refreshHealth } = useApp();
+  if (!healthChecked || health) return null;
+  return (
+    <div role="alert" className="flex flex-wrap items-center justify-between gap-2 border-b border-danger/30 bg-danger-soft px-4 py-2 text-[13px] text-fg">
+      <span><b>Can't reach DRHP Copilot.</b> If it runs on a hosted server it may be asleep or restarting. Your work is not lost if the server keeps its storage; open your DRHP Copilot link again to wake it.</span>
+      <Button size="sm" variant="secondary" onClick={() => refreshHealth()}>Try again</Button>
+    </div>
+  );
+}
+
 export function TopBar() {
   const { theme, toggleTheme, openSettings } = useApp();
   return (
@@ -55,7 +70,7 @@ export function TopBar() {
       <Link to="/projects" className="flex items-center gap-2.5">
         <Logo />
         <div className="leading-tight">
-          <div className="text-[14px] font-semibold tracking-tight text-fg">DRHP Studio</div>
+          <div className="text-[14px] font-semibold tracking-tight text-fg">DRHP Copilot</div>
           <div className="text-2xs text-fg-subtle">SME offer document drafter</div>
         </div>
       </Link>

@@ -1,7 +1,7 @@
 # Hosting the model on RunPod Serverless (billed only while it runs)
 
-The app (DRHP Studio) stays on the laptop or in its Docker container. Only the model runs on RunPod: Qwen2.5-7B-Instruct
-with the A_qa_dpo LoRA adapter, behind RunPod's vLLM worker, which speaks the same OpenAI-compatible API as
+The app (DRHP Copilot) stays on the laptop or in its Docker container. Only the model runs on RunPod: Qwen2.5-7B-Instruct
+with the A_qa3_dpo3 LoRA adapter (HF repo `18Anshu/sme-drhp-7b-lora-v2`; since 20 Nov 2026, before that `A_qa_dpo` in `18Anshu/sme-drhp-7b-lora`, kept as the rollback: `python -m serve.runpod` `update` after setting `adapter_repo` in `build/runpod_endpoint.json`), behind RunPod's vLLM worker, which speaks the same OpenAI-compatible API as
 `serve/llm.py`. Everything here is done by `python -m serve.runpod` (`serve/runpod.py`).
 
 ## Cost

@@ -76,10 +76,21 @@ export default function OfferPage() {
   const [form, setForm] = useState<Offer>({});
   const [facts, setFacts] = useState<Fact[]>([]);
   const [saving, setSaving] = useState(false);
+  const [platformNote, setPlatformNote] = useState<{ title: string; detail: string; suggest: string } | null>(null);
   const pid = project?.id ?? "";
 
   useEffect(() => { if (project) setForm(project.offer || {}); }, [project?.id]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (pid) api.facts(pid).then(setFacts).catch(() => {}); }, [pid, version]);
+  // the files may name a different listing platform from the one chosen when the project was created
+  useEffect(() => {
+    if (!pid) return;
+    api.review(pid)
+      .then((r) => {
+        const i = (r.issues as unknown as { field?: string; title: string; detail: string; suggest: string }[]).find((x) => x.field === "platform");
+        setPlatformNote(i ? { title: i.title, detail: i.detail, suggest: i.suggest } : null);
+      })
+      .catch(() => {});
+  }, [pid, version, project?.offer?.board]);
 
   const dirty = useMemo(() => JSON.stringify(form) !== JSON.stringify(project?.offer || {}), [form, project?.offer]);
   const set = (k: string, v: string) => setForm((f) => ({ ...f, [k]: v }));
@@ -127,6 +138,16 @@ export default function OfferPage() {
           </>
         }
       />
+
+      {platformNote && (
+        <div role="alert" className="mb-5 flex flex-wrap items-start justify-between gap-3 rounded-lg border border-warning/40 bg-warning-soft/70 px-4 py-3 text-[13px] text-fg">
+          <div className="min-w-0">
+            <div className="font-medium">{platformNote.title}</div>
+            <div className="text-fg-muted">{platformNote.detail}</div>
+          </div>
+          <Button size="sm" onClick={() => set("board", platformNote.suggest)}>Switch platform</Button>
+        </div>
+      )}
 
       <div className="mb-5 flex items-start gap-3 rounded-lg border border-info/25 bg-info-soft/60 px-4 py-3 text-[13px] text-fg">
         <Lock className="mt-0.5 h-4 w-4 shrink-0 text-info" />
@@ -203,7 +224,7 @@ export default function OfferPage() {
       </div>
 
       <div className={cn("fixed bottom-0 left-60 right-0 z-20 border-t border-border bg-surface/95 backdrop-blur transition-transform", dirty ? "translate-y-0" : "translate-y-full")}>
-        <div className="mx-auto flex max-w-[1240px] items-center justify-between px-8 py-3">
+        <div className="mx-auto flex max-w-[1240px] items-center justify-between px-8 py-3 pr-44">
           <span className="flex items-center gap-2 text-[13px] text-fg-muted"><Info className="h-4 w-4" /> You have unsaved changes.</span>
           <div className="flex gap-2">
             <Button variant="ghost" icon={<Undo2 className="h-4 w-4" />} onClick={() => setForm(project?.offer || {})}>Discard</Button>

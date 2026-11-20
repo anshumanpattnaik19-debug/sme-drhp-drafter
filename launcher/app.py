@@ -1,15 +1,21 @@
-"""Launcher for DRHP Studio (docs/HOSTING.md): a small always-on page, free on a Hugging Face Space, that starts the
+"""Launcher for DRHP Copilot (docs/HOSTING.md): a small always-on page, free on a Hugging Face Space, that starts the
 app's RunPod CPU pod when someone with the shared password asks, waits until the app answers, and sends them to it.
 The pod itself stops after its idle time (serve/idle.py), so it bills only while it is used.
 
-Environment (Space secrets and variables): APP_PASSWORD, RUNPOD_PODS_KEY (a RunPod key with Pods access),
-LAUNCHER_SECRET, POD_ID. The key never reaches the browser; the visitor needs the password here and again in the app.
+Environment (Vercel or Space variables): APP_PASSWORD, RUNPOD_PODS_KEY (a RunPod key with Pods access),
+LAUNCHER_SECRET, POD_BODY (the pod's create request as JSON: secret references, no secret values), POD_NAME (default
+drhp-studio). The pod is found by name, not by a fixed id: a stopped pod resumes only on its own host, and RunPod answers
+400 "not enough free memory on the host" when that host is full (seen on 19 Nov 2026). The launcher then removes that
+pod and creates a new one from POD_BODY, so the app's address can change; the launcher always sends people to the
+current one. Work saved inside the old pod is lost. The key never reaches the browser; the visitor needs the password
+here and again in the app.
 """
 from __future__ import annotations
 
 import hashlib
 import hmac
 import html
+import json
 import os
 import threading
 import time
@@ -22,17 +28,18 @@ from fastapi.responses import HTMLResponse, JSONResponse
 API = "https://api.runpod.io/v2"
 COOKIE, MAX_AGE = "drhp_launcher", 3600
 MAX_FAILS, WINDOW = 5, 600
-app = FastAPI(title="DRHP Studio launcher", docs_url=None, redoc_url=None, openapi_url=None)
+app = FastAPI(title="DRHP Copilot launcher", docs_url=None, redoc_url=None, openapi_url=None)
 _fails: dict[str, list[float]] = {}
 _lock = threading.Lock()
 
 
-def pod_id():
-    return os.environ["POD_ID"]
+NAME = os.environ.get("POD_NAME", "drhp-studio")
+LIVE = ("RUNNING", "PROVISIONING", "STARTING", "CREATED")
+_wake_lock = threading.Lock()
 
 
-def app_url():
-    return f"https://{pod_id()}-7860.proxy.runpod.net"
+def app_url(pod_id):
+    return f"https://{pod_id}-7860.proxy.runpod.net"
 
 
 def _sign(exp):
@@ -58,9 +65,53 @@ def _runpod(method, path, **kw):
     return r.json() if r.content else {}
 
 
-def _answers():
+def _mine():
+    """Every pod with this name that is not terminated, the one to keep first (running, then newest)."""
+    pods = _runpod("GET", "/pods")
+    pods = pods.get("pods", pods.get("data", [])) if isinstance(pods, dict) else pods
+    mine = [p for p in pods if p.get("name") == NAME and p.get("status") != "TERMINATED"]
+    mine.sort(key=lambda p: (p.get("status") in LIVE, p.get("createdAt") or ""), reverse=True)
+    return mine
+
+
+def _current():
+    """The pod to use: the best one with this name, or None. Two visitors waking the app at the same moment, on two
+    function instances, can each create a pod; the extra ones are deleted here, so only one ever bills."""
+    mine = _mine()
+    for extra in mine[1:]:
+        try:
+            _runpod("DELETE", f"/pods/{extra['id']}")
+        except httpx.HTTPError:
+            pass
+    return mine[0] if mine else None
+
+
+def _create():
+    body = os.environ.get("POD_BODY")
+    if not body:
+        raise httpx.HTTPError("POD_BODY is not set")
+    _runpod("POST", "/pods", json=json.loads(body))
+
+
+def _wake():
+    """Make sure a pod is running or on its way: start the stopped one, or replace it if its host has no room."""
+    with _wake_lock:
+        p = _current()
+        if p is None:
+            return _create()
+        if p["status"] in ("EXITED", "ERROR"):
+            try:
+                _runpod("POST", f"/pods/{p['id']}/action", json={"action": "start"})
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code >= 500:
+                    raise
+                _runpod("DELETE", f"/pods/{p['id']}")        # its host cannot take it back; start a fresh one
+                _create()
+
+
+def _answers(pod_id):
     try:
-        return httpx.get(f"{app_url()}/login", timeout=6).status_code == 200
+        return httpx.get(f"{app_url(pod_id)}/login", timeout=6).status_code == 200
     except httpx.HTTPError:
         return False
 
@@ -77,13 +128,13 @@ button{margin-top:16px;width:100%;padding:10px;border:0;border-radius:8px;backgr
 .bar i{display:block;height:100%;width:30%;background:var(--accent);animation:s 1.4s ease-in-out infinite}@keyframes s{0%{margin-left:-30%}100%{margin-left:100%}}"""
 
 FORM = """<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>DRHP Studio</title><style>{style}</style></head><body><form class="card" method="post" action="/start"><h1>DRHP Studio</h1>
-<p>Enter the shared password. The app starts if it is asleep (about 3–4 minutes), then opens.</p>
+<title>DRHP Copilot</title><style>{style}</style></head><body><form class="card" method="post" action="/start"><h1>DRHP Copilot</h1>
+<p>Enter the shared password. The app starts if it is asleep (about 3–4 minutes), then opens. It closes itself after 10 minutes without use; open this page again to wake it.</p>
 <label for="pw">Password</label><input id="pw" name="password" type="password" autofocus required>
-<button type="submit">Open DRHP Studio</button>{error}</form></body></html>"""
+<button type="submit">Open DRHP Copilot</button>{error}</form></body></html>"""
 
 WAIT = """<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Starting DRHP Studio</title><style>{style}</style></head><body><div class="card"><h1>Starting DRHP Studio</h1>
+<title>Starting DRHP Copilot</title><style>{style}</style></head><body><div class="card"><h1>Starting DRHP Copilot</h1>
 <p id="msg">Waking the app. This takes about 3–4 minutes after a long pause; you will be taken there when it is ready.</p>
 <div class="bar"><i></i></div><p id="st" style="margin:0;font-size:13px"></p></div>
 <script>
@@ -118,8 +169,7 @@ async def start(request: Request):
             _fails.setdefault(ip, []).append(time.time())
         return page("Wrong password.", 401)
     try:
-        if _runpod("GET", f"/pods/{pod_id()}")["status"] in ("EXITED", "ERROR"):
-            _runpod("POST", f"/pods/{pod_id()}/action", json={"action": "start"})
+        _wake()
     except httpx.HTTPError:
         return page("The app could not be started. Please try again in a minute.", 502)
     exp = int(time.time()) + MAX_AGE
@@ -133,10 +183,11 @@ def status(request: Request):
     if not _valid(request.cookies.get(COOKIE)):
         return JSONResponse({"detail": "sign in required"}, status_code=401)
     try:
-        st = _runpod("GET", f"/pods/{pod_id()}")["status"]
+        p = _current()
     except httpx.HTTPError:
         return {"state": "unknown", "ready": False}
-    if st in ("TERMINATED",):
-        return {"state": st, "ready": False, "error": "The app's server was removed. Please contact the owner."}
-    ready = st == "RUNNING" and _answers()
-    return {"state": "ready" if ready else st.lower(), "ready": ready, "url": app_url() if ready else None}
+    if p is None:
+        return {"state": "creating", "ready": False}
+    st = p["status"]
+    ready = st == "RUNNING" and _answers(p["id"])
+    return {"state": "ready" if ready else st.lower(), "ready": ready, "url": app_url(p["id"]) if ready else None}

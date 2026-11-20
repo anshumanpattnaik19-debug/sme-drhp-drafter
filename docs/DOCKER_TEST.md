@@ -21,6 +21,12 @@ Run: 15 Nov 2026, laptop with Docker Desktop 29.9.3.
 
 The OCR of the scanned JPG ran inside the container with RapidOCR (offline), so the image has its OCR models.
 
+## Re-run on 15 November 2026 (after the final fixes)
+
+The image was rebuilt from the latest code. The container starts and answers `/api/health` with OCR available, and the
+same smoke test passed (740 facts, one section drafted with the offline drafter). The smoke test's polling was fixed to
+retry a dropped keep-alive connection; the app itself was not at fault.
+
 ## What was not tested, and why
 
 **The drafting model inside the container was not tested.** The course VM's SSH server refuses port forwarding for

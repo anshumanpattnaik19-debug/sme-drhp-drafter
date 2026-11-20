@@ -207,13 +207,88 @@ def get_drafts(pid):
     return _read(os.path.join(pdir(pid), "drafts.json"), {})
 
 
-def save_draft(pid, key, draft):
+MAX_VERSIONS = 3         # the last three drafts of a section are kept; the oldest goes when a fourth is saved
+
+
+def _versions_path(pid):
+    return os.path.join(pdir(pid), "draft_versions.json")
+
+
+def get_versions(pid, key):
+    """The saved drafts of a section, oldest first: [{"n", "created_at", "draft"}]. A draft saved before versions existed
+    is Draft 1."""
+    vs = _read(_versions_path(pid), {}).get(key)
+    if vs is None:
+        cur = get_drafts(pid).get(key)
+        return [{"n": cur.get("version", 1), "created_at": cur.get("updated_at"), "draft": cur}] if cur else []
+    return vs
+
+
+def save_draft(pid, key, draft, new_version=False):
+    """Save a section's draft. new_version=True (a fresh draft from the writer) adds Draft N+1 and selects it; otherwise
+    the selected version is updated in place (an edit, a sign-off). draft None clears the section and all its versions."""
     with LOCK:
         d = get_drafts(pid)
+        allv = _read(_versions_path(pid), {})
         if draft is None:
             d.pop(key, None)
+            allv.pop(key, None)
         else:
+            vs = allv.get(key) or get_versions(pid, key)
+            if new_version or not vs:
+                n = max([v["n"] for v in vs] + [0]) + 1
+                draft["version"] = n
+                vs.append({"n": n, "created_at": draft.get("updated_at"), "draft": draft})
+                while len(vs) > MAX_VERSIONS:
+                    drop = next(v for v in vs if v["n"] != n)
+                    vs.remove(drop)
+            else:
+                n = draft.get("version") or (d.get(key) or {}).get("version") or 1
+                draft["version"] = n
+                for v in vs:
+                    if v["n"] == n:
+                        v["draft"] = draft
+                        break
+                else:
+                    vs.append({"n": n, "created_at": draft.get("updated_at"), "draft": draft})
+            allv[key] = vs
             d[key] = draft
         _write(os.path.join(pdir(pid), "drafts.json"), d)
+        _write(_versions_path(pid), allv)
         p = get_project(pid)
         save_project(p)
+
+
+def select_version(pid, key, n):
+    """Make Draft n the section's current draft (what the review, the export and the assistant use)."""
+    with LOCK:
+        vs = get_versions(pid, key)
+        pick = next((v for v in vs if v["n"] == n), None)
+        if not pick:
+            return None
+        d = get_drafts(pid)
+        d[key] = pick["draft"]
+        _write(os.path.join(pdir(pid), "drafts.json"), d)
+        allv = _read(_versions_path(pid), {})
+        allv[key] = vs
+        _write(_versions_path(pid), allv)
+        save_project(get_project(pid))
+        return pick["draft"]
+
+
+def delete_version(pid, key, n):
+    """Remove Draft n unless it is the only one; if it was selected, the newest remaining draft is selected."""
+    with LOCK:
+        vs = get_versions(pid, key)
+        if len(vs) <= 1 or not any(v["n"] == n for v in vs):
+            return False
+        vs = [v for v in vs if v["n"] != n]
+        allv = _read(_versions_path(pid), {})
+        allv[key] = vs
+        _write(_versions_path(pid), allv)
+        d = get_drafts(pid)
+        if (d.get(key) or {}).get("version") == n:
+            d[key] = vs[-1]["draft"]
+            _write(os.path.join(pdir(pid), "drafts.json"), d)
+        save_project(get_project(pid))
+        return True

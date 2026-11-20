@@ -18,11 +18,11 @@ from pathlib import Path
 from serve.runpod import ROOT, key, load_state
 
 STAGE = ROOT / "build" / "space"
-CODE = ["serve", "draft", "extract", "ingest", "assemble", "verify", "rag", "data", "teacher"]
+CODE = ["serve", "draft", "extract", "ingest", "assemble", "verify", "rag", "data", "teacher", "rai"]
 UI = ["ui/src", "ui/public", "ui/index.html", "ui/package.json", "ui/package-lock.json", "ui/postcss.config.js",
       "ui/tailwind.config.js", "ui/tsconfig.json", "ui/vite.config.ts"]
 README = """---
-title: DRHP Studio
+title: DRHP Copilot
 emoji: 📄
 colorFrom: indigo
 colorTo: gray
@@ -32,7 +32,7 @@ pinned: false
 short_description: SME DRHP drafting assistant (password protected)
 ---
 
-# DRHP Studio
+# DRHP Copilot
 
 A research prototype that drafts sections of an SME Draft Red Herring Prospectus from an issuer's own files, for review
 by the lead manager and legal counsel. Access needs the shared password. Drafts are not filed, signed off or sent

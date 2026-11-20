@@ -3,11 +3,11 @@ import { useNavigate, useParams } from "react-router-dom";
 import {
   AlertTriangle, ArrowLeft, ArrowRight, Check, CheckCircle2, ChevronDown, Circle, CircleDashed, ExternalLink, FileWarning,
   Loader2, MoreHorizontal, PenLine, Plus, RotateCcw, Save, Sparkles, Trash2, Wand2, X, XCircle, FlaskConical, ShieldCheck,
-  FileText, HelpCircle, Undo2,
+  FileText, HelpCircle, ListChecks, Undo2,
 } from "lucide-react";
 import { api } from "../lib/api";
 import { useApp, useProject } from "../lib/state";
-import type { Draft, DraftBlock, Fact, SectionDef, SectionRow, Source } from "../lib/types";
+import type { Draft, DraftBlock, Fact, SectionData, SectionDef, SectionRow, Source } from "../lib/types";
 import { ago, cn, factDisplay } from "../lib/utils";
 import { RichText } from "../components/RichText";
 import { EngineBadge, SignOffBadge, WRITER_META, WriterBadge } from "../components/WriterBadge";
@@ -231,9 +231,10 @@ function FactRow({ f, onOpen, active }: { f: Fact; onOpen: (f: Fact) => void; ac
   );
 }
 
-function Inspector({ sec, draft, facts, selected, activeFact, presentTypes, onOpenFact, onOpenSource, onJump }: {
+function Inspector({ sec, draft, facts, selected, activeFact, presentTypes, onOpenFact, onOpenSource, onJump, open, onClose }: {
   sec: SectionDef; draft: Draft | null; facts: Map<string, Fact>; selected: number | null; activeFact: Fact | null; presentTypes: Set<string>;
   onOpenFact: (f: Fact) => void; onOpenSource: (s: Source) => void; onJump: (i: number) => void;
+  open: boolean; onClose: () => void;
 }) {
   const [tab, setTab] = useState<"checks" | "sources">("checks");
   useEffect(() => { if (selected !== null || activeFact) setTab("sources"); }, [selected, activeFact]);
@@ -248,7 +249,12 @@ function Inspector({ sec, draft, facts, selected, activeFact, presentTypes, onOp
   const phBlocks = draft ? draft.blocks.map((b, i) => ({ b, i })).filter(({ b }) => (b.text || (b.rows || []).flat().join(" ")).includes("[●]")) : [];
 
   return (
-    <aside className="flex w-[340px] shrink-0 flex-col border-l border-border bg-surface">
+    <aside className={cn("shrink-0 flex-col border-l border-border bg-surface",
+      open ? "fixed bottom-0 right-0 top-14 z-30 flex w-[min(340px,100vw)] shadow-pop" : "hidden xl:flex xl:w-[340px]")}>
+      <div className="flex items-center justify-between border-b border-border px-3 py-2 xl:hidden">
+        <span className="text-[13px] font-semibold text-fg">Checks and sources</span>
+        <Button size="icon-sm" variant="ghost" onClick={onClose} aria-label="Close checks"><X className="h-4 w-4" /></Button>
+      </div>
       <Tabs value={tab} onChange={setTab} className="px-3 pt-2" tabs={[{ value: "checks", label: "Checks" }, { value: "sources", label: "Sources", count: draft ? (selected !== null ? selFacts.length + selSources.length : allSources.length + routed.length) : undefined }]} />
       <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-4 scroll-thin">
         {tab === "checks" && (
@@ -411,12 +417,12 @@ function Inspector({ sec, draft, facts, selected, activeFact, presentTypes, onOp
 export default function DraftPage() {
   const { key } = useParams();
   const navigate = useNavigate();
-  const { project, version, job, startJob } = useProject();
+  const { project, version, job, startJob, cancelJob } = useProject();
   const { health, openSettings } = useApp();
   const toast = useToast();
   const pid = project?.id ?? "";
   const [sections, setSections] = useState<SectionRow[] | null>(null);
-  const [data, setData] = useState<{ section: SectionDef; draft: Draft | null } | null>(null);
+  const [data, setData] = useState<SectionData | null>(null);
   const [facts, setFacts] = useState<Map<string, Fact>>(new Map());
   const [selected, setSelected] = useState<number | null>(null);
   const [activeFact, setActiveFact] = useState<Fact | null>(null);
@@ -424,6 +430,8 @@ export default function DraftPage() {
   const [saving, setSaving] = useState(false);
   const docRef = useRef<HTMLDivElement>(null);
   const [signing, setSigning] = useState(false);
+  const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [phoneDoc, setPhoneDoc] = useState(false);          // on a phone the list and the document are separate screens
   const [reviewer, setReviewer] = useState(() => { try { return localStorage.getItem("reviewer") || ""; } catch { return ""; } });
   const [signNote, setSignNote] = useState("");
 
@@ -445,13 +453,18 @@ export default function DraftPage() {
 
   const presentTypes = useMemo(() => new Set((project?.files ?? []).filter((f) => f.status === "processed").map((f) => f.doc_type)), [project?.files]);
   const idx = sections?.findIndex((s) => s.key === current) ?? -1;
-  const go = (k: string) => navigate(`/p/${pid}/draft/${k}`);
+  const go = (k: string) => { setPhoneDoc(true); navigate(`/p/${pid}/draft/${k}`); };
   const drafted = sections?.filter((s) => s.status === "drafted").length ?? 0;
   const row = sections?.[idx];
   const sec = data?.section;
   const draft = data?.draft ?? null;
+  const versions = data?.versions ?? [];
 
   const run = async (keys?: string[], skip = false) => {
+    if (health?.use_model && health.model.serverless && health.model.workers_running === 0)
+      toast("info", "Waking the model", "The first section can take 3 to 6 minutes while the model starts. Later ones are quick. You can leave this page open.");
+    if (health?.use_model && health.model.reachable === false)
+      toast("error", "The model is not reachable", "Sections that need prose will be left as drafting briefs. Check Settings, or try again in a minute.");
     try { startJob(await api.draft(pid, keys, skip)); } catch (e) { toast("error", "Could not start drafting", (e as Error).message); }
   };
   const save = async () => {
@@ -469,6 +482,19 @@ export default function DraftPage() {
     await api.clearSection(pid, current);
     setData((x) => (x ? { ...x, draft: null } : x));
     api.sections(pid).then(setSections);
+  };
+  const pickVersion = async (n: number) => {
+    try {
+      setData(await api.selectVersion(pid, current, n));
+      api.sections(pid).then(setSections);
+      toast("success", `Using Draft ${n}`, "The review, the export and the assistant now use this draft of the section.");
+    } catch (e) { toast("error", "Could not switch draft", (e as Error).message); }
+  };
+  const dropVersion = async (n: number) => {
+    try {
+      setData(await api.deleteVersion(pid, current, n));
+      api.sections(pid).then(setSections);
+    } catch (e) { toast("error", "Could not delete the draft", (e as Error).message); }
   };
   const jump = (i: number) => { setSelected(i); document.getElementById(`b-${i}`)?.scrollIntoView({ behavior: "smooth", block: "center" }); };
   const openFact = (f: Fact) => f.file_id && navigate(`/p/${pid}/documents?file=${f.file_id}&tab=text&loc=${encodeURIComponent(f.loc)}`);
@@ -490,7 +516,7 @@ export default function DraftPage() {
   return (
     <div className="flex h-full">
       {/* outline */}
-      <div className="flex w-[280px] shrink-0 flex-col border-r border-border bg-subtle/50">
+      <div className={cn("w-full shrink-0 flex-col border-r border-border bg-subtle/50 md:flex md:w-[280px]", phoneDoc ? "hidden" : "flex")}>
         <div className="border-b border-border p-3">
           <div className="mb-2 flex items-center justify-between text-xs">
             <span className="font-semibold text-fg">Sections</span>
@@ -502,6 +528,7 @@ export default function DraftPage() {
               disabled={drafting || !sections || drafted === sections.length} onClick={() => run(undefined, drafted > 0)}>
               {drafting ? `Drafting ${job!.done}/${job!.total}` : sections && drafted === sections.length ? "All sections drafted" : drafted ? "Draft remaining" : "Draft all sections"}
             </Button>
+            {drafting && <Button size="sm" variant="secondary" className="h-8 text-danger" icon={<X className="h-3.5 w-3.5" />} onClick={cancelJob} aria-label="Cancel drafting">Cancel</Button>}
             <Menu
               trigger={<Button size="icon-sm" className="h-8 w-8" aria-label="More drafting actions"><MoreHorizontal className="h-4 w-4" /></Button>}
               items={[
@@ -515,18 +542,31 @@ export default function DraftPage() {
       </div>
 
       {/* document */}
-      <div className="flex min-w-0 flex-1 flex-col">
-        <div className="flex h-12 shrink-0 items-center justify-between gap-3 border-b border-border bg-surface px-5">
-          <div className="flex min-w-0 items-center gap-2">
+      <div className={cn("min-w-0 flex-1 flex-col md:flex", phoneDoc ? "flex" : "hidden")}>
+        <div className="flex min-h-12 shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b border-border bg-surface px-3 py-2 md:px-5">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            <Button size="sm" variant="ghost" className="md:hidden" icon={<ArrowLeft className="h-3.5 w-3.5" />} onClick={() => setPhoneDoc(false)}>Sections</Button>
             <Button size="icon-sm" variant="ghost" disabled={idx <= 0} onClick={() => sections && go(sections[idx - 1].key)} aria-label="Previous section"><ArrowLeft className="h-4 w-4" /></Button>
             <Button size="icon-sm" variant="ghost" disabled={!sections || idx >= sections.length - 1} onClick={() => sections && go(sections[idx + 1].key)} aria-label="Next section"><ArrowRight className="h-4 w-4" /></Button>
             <span className="min-w-[80px] truncate text-[13px] font-semibold text-fg" title={sec?.title}>{sec?.title ?? "…"}</span>
             {sec && <span className="hidden shrink-0 2xl:inline-flex"><WriterBadge writer={sec.writer} /></span>}
-            {draft && <span className="inline-flex shrink-0"><EngineBadge engine={draft.edited ? "user" : draft.engine} model={draft.model_name} /></span>}
-            {draft && <span className="inline-flex shrink-0"><SignOffBadge review={draft.review} /></span>}
+            {draft && versions.length > 0 && (
+              <Menu
+                trigger={<Button size="sm" variant="secondary" icon={<ChevronDown className="h-3.5 w-3.5" />} aria-label="Choose a draft">Draft {draft.version ?? 1} · {versions.length} saved</Button>}
+                items={[
+                  ...[...versions].reverse().map((v) => ({
+                    label: `Draft ${v.n}${v.selected ? "  (in use)" : ""} · ${v.words} words · ${v.ungrounded} not found · ${v.placeholders ?? 0} [●]${v.review === "reviewed" ? " · signed off" : ""}${v.edited ? " · edited" : ""}`,
+                    onClick: () => { if (!v.selected) pickVersion(v.n); },
+                  })),
+                  ...(versions.length > 1 ? [{ label: `Delete Draft ${draft.version ?? 1}`, icon: <Trash2 />, danger: true, onClick: () => dropVersion(draft.version ?? 1) }] : []),
+                ]}
+              />
+            )}
+            {draft && <span className="hidden shrink-0 sm:inline-flex"><EngineBadge engine={draft.edited ? "user" : draft.engine} model={draft.model_name} /></span>}
+            {draft && <span className="hidden shrink-0 sm:inline-flex"><SignOffBadge review={draft.review} /></span>}
             {draft && <span className="hidden whitespace-nowrap text-2xs text-fg-subtle 2xl:inline">Updated {ago(draft.updated_at)}</span>}
           </div>
-          <div className="flex shrink-0 items-center gap-1.5">
+          <div className="flex flex-wrap items-center gap-1.5">
             {editing ? (
               <>
                 <Button size="sm" variant="ghost" onClick={() => setEditing(null)}>Cancel</Button>
@@ -534,9 +574,10 @@ export default function DraftPage() {
               </>
             ) : (
               <>
+                <Button size="sm" variant="ghost" className="xl:hidden" icon={<ListChecks className="h-3.5 w-3.5" />} onClick={() => setInspectorOpen(true)}>Checks</Button>
                 {draft && <Button size="sm" icon={<PenLine className="h-3.5 w-3.5" />} onClick={() => setEditing(JSON.parse(JSON.stringify(draft.blocks)))} disabled={isRunningHere}>Edit</Button>}
                 <Button size="sm" variant={draft ? "secondary" : "primary"} icon={draft ? <RotateCcw className="h-3.5 w-3.5" /> : <Sparkles className="h-3.5 w-3.5" />} onClick={() => run([current])} disabled={drafting} loading={isRunningHere}>
-                  {draft ? "Redraft" : "Draft section"}
+                  {draft ? (versions.length >= 3 ? "Redraft (replaces oldest)" : `Redraft as Draft ${(Math.max(0, ...versions.map((v) => v.n))) + 1}`) : "Draft section"}
                 </Button>
                 {draft && (signedOff ? (
                   <Button size="sm" variant="ghost" icon={<Undo2 className="h-3.5 w-3.5" />} onClick={() => doSignoff(false)}>Withdraw sign-off</Button>
@@ -610,7 +651,7 @@ export default function DraftPage() {
         </div>
       </div>
 
-      {sec && <Inspector sec={sec} draft={editing ? null : draft} facts={facts} selected={selected} activeFact={activeFact} presentTypes={presentTypes} onOpenFact={openFact} onOpenSource={openSource} onJump={jump} />}
+      {sec && <Inspector open={inspectorOpen} onClose={() => setInspectorOpen(false)} sec={sec} draft={editing ? null : draft} facts={facts} selected={selected} activeFact={activeFact} presentTypes={presentTypes} onOpenFact={openFact} onOpenSource={openSource} onJump={jump} />}
 
       <Dialog
         open={signing}

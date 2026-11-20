@@ -54,23 +54,30 @@ def status(settings, timeout=4.0):
 
 
 def make_chat(settings):
-    """chat(messages, frequency_penalty=0.0) -> (text, usage). A positive frequency_penalty is sent to the server
-    (vLLM, OpenAI-compatible); 0 leaves it out, so Q&A and other callers keep the server's default."""
+    """chat(messages, frequency_penalty=0.0, n=1, temperature=None) -> (text, usage). A positive frequency_penalty is sent to
+    the server (vLLM, OpenAI-compatible); 0 leaves it out, so Q&A and other callers keep the server's default. With n > 1 the
+    server writes n samples of the same prompt in one request and the first value is a list of n texts (best-of-n drafting)."""
     url = settings["model_url"].rstrip("/")
 
-    def chat(messages, frequency_penalty=0.0):
+    def chat(messages, frequency_penalty=0.0, n=1, temperature=None):
         body = {"model": settings["model_name"], "messages": messages,
-                "temperature": float(settings.get("temperature", 0.2)), "max_tokens": int(settings.get("max_tokens", 3000))}
+                "temperature": float(settings.get("temperature", 0.2) if temperature is None else temperature),
+                "max_tokens": int(settings.get("max_tokens", 3000))}
         if frequency_penalty:
             body["frequency_penalty"] = float(frequency_penalty)
+        if n > 1:
+            body["n"] = int(n)
         try:
             r = httpx.post(f"{url}/chat/completions", json=body, headers=_headers(settings), timeout=600)
             r.raise_for_status()
         except httpx.HTTPError as e:
             raise ModelError(f"model server error: {e}") from e
         out = r.json()
+        if n > 1:
+            return [ch["message"]["content"] or "" for ch in out["choices"]], out.get("usage") or {}
         return out["choices"][0]["message"]["content"] or "", out.get("usage") or {}
 
+    chat.supports_n = True
     return chat
 
 

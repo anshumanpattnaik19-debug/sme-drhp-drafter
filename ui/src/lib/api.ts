@@ -1,5 +1,5 @@
 import type {
-  Draft, DraftBlock, Fact, Health, IssuerFile, Job, Meta, Offer, Project, Review, SectionDef, SectionRow, Settings, Block,
+  Draft, DraftBlock, Fact, Health, IssuerFile, Job, Meta, Offer, Project, Review, SectionData, SectionRow, Settings, Block,
 } from "./types";
 
 export class ApiError extends Error {
@@ -21,7 +21,11 @@ async function req<T>(method: string, url: string, body?: unknown): Promise<T> {
   try {
     res = await fetch(url, init);
   } catch {
-    throw new ApiError(0, "Cannot reach the drafting service. Is it running on port 8765?");
+    throw new ApiError(0, "Cannot reach DRHP Copilot. If it runs on a hosted server it may be asleep or restarting: open your DRHP Copilot link again to wake it, then retry.");
+  }
+  if (res.status === 401 && !url.startsWith("/login")) {
+    window.location.href = `/login?next=${encodeURIComponent(window.location.pathname)}`;       // the sign-in lapsed
+    throw new ApiError(401, "Signed out: opening the sign-in page.");
   }
   if (!res.ok) {
     let msg = res.statusText;
@@ -62,6 +66,7 @@ export const api = {
   rawUrl: (pid: string, fid: string) => `${P(pid)}/files/${fid}/raw`,
   patchFile: (pid: string, fid: string, doc_type: string) => req<IssuerFile>("PATCH", `${P(pid)}/files/${fid}`, { doc_type }),
   deleteFile: (pid: string, fid: string) => req<{ ok: boolean }>("DELETE", `${P(pid)}/files/${fid}`),
+  clearQueue: (pid: string) => req<{ removed: number }>("POST", `${P(pid)}/files/clear-queue`),
   process: (pid: string, opts: { file_ids?: string[]; force?: boolean } = {}) => req<Job>("POST", `${P(pid)}/process`, opts),
 
   facts: (pid: string) => req<Fact[]>("GET", `${P(pid)}/facts`),
@@ -70,7 +75,9 @@ export const api = {
   deleteFact: (pid: string, id: string) => req<{ ok: boolean }>("DELETE", `${P(pid)}/facts/${id}`),
 
   sections: (pid: string) => req<SectionRow[]>("GET", `${P(pid)}/sections`),
-  section: (pid: string, key: string) => req<{ section: SectionDef; draft: Draft | null }>("GET", `${P(pid)}/sections/${key}`),
+  section: (pid: string, key: string) => req<SectionData>("GET", `${P(pid)}/sections/${key}`),
+  selectVersion: (pid: string, key: string, version: number) => req<SectionData>("POST", `${P(pid)}/sections/${key}/select`, { version }),
+  deleteVersion: (pid: string, key: string, n: number) => req<SectionData>("DELETE", `${P(pid)}/sections/${key}/versions/${n}`),
   draft: (pid: string, keys?: string[], skip_drafted = false) => req<Job>("POST", `${P(pid)}/draft`, { keys, skip_drafted }),
   saveSection: (pid: string, key: string, blocks: DraftBlock[]) => req<Draft>("PUT", `${P(pid)}/sections/${key}`, { blocks }),
   clearSection: (pid: string, key: string) => req<{ ok: boolean }>("DELETE", `${P(pid)}/sections/${key}`),
