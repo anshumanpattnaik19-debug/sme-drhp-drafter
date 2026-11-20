@@ -44,14 +44,28 @@ def _fact_lines(facts):
     return json.dumps(rows, ensure_ascii=False, separators=(",", ":"))
 
 
-def drafting_messages(company, section_title, outline, heading, facts, prev_summary="", precedent=None):
+# 19 Nov 2026 trace of the shipped model's test drafts: 8% of its invented figures were copied from the PRECEDENT block, among
+# them another company's promoter's driving-licence number, although the block says "for structure and tone only, never for
+# figures". The training format keeps the real text (scrub_precedent=False), and the live app sends no precedent at all, so this
+# matters to the evaluation harness and to any later use: scrub_precedent=True turns every figure, identifier and long number
+# into [●] before the model sees it.
+RE_PRECEDENT_NUM = re.compile(r"\b(?:[A-Z]{1,5}[- ]?)?\d{3,}[\d,./-]*\b|\b\d{1,2}[,.]\d[\d,.]*\b")
+
+
+def scrub_precedent(text):
+    """The precedent text with every multi-digit number, decimal, identifier and date number as [●]; single digits (list
+    numbers, "2 Directors") and words stay, so the structure and tone the model borrows are intact."""
+    return RE_PRECEDENT_NUM.sub("[●]", text)
+
+
+def drafting_messages(company, section_title, outline, heading, facts, prev_summary="", precedent=None, scrub=False):
     parts = [f"COMPANY: {company}", f"SECTION: {section_title}",
              "SECTION OUTLINE: " + " | ".join(strip_page_refs(h)[0] for h in outline[:30]),
              f"SUB-HEADING: {heading}",
              f"PREVIOUS SUB-SECTION (summary): {strip_page_refs(prev_summary)[0] or '(start of section)'}",
              f"FACTS: {_fact_lines(facts)}"]
     if precedent:
-        words = strip_page_refs(precedent)[0].split()     # another document's page numbers mean nothing here
+        words = strip_page_refs(scrub_precedent(precedent) if scrub else precedent)[0].split()   # another document's page numbers mean nothing here
         parts.append("PRECEDENT (same sub-heading in another company's offer document; for structure and tone only, "
                      "never for figures or names):\n" + " ".join(words[:PRECEDENT_WORDS]))
     parts.append("Draft the sub-section now.")

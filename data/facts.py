@@ -31,8 +31,9 @@ RE_DATES = [re.compile(rf"\b(\d{{1,2}})(?:st|nd|rd|th)?\s*{MON},?\s*((?:19|20)\d
             re.compile(r"\b(\d{1,2})[./-](\d{1,2})[./-]((?:19|20)\d{2})\b")]
 # a number starts after a space, "₹" or "Rs." but not inside another number ("1,405.09" is one figure, not 405.09)
 RE_FIG = re.compile(r"(?<![\w,])(?<!\d\.)\(?-?\d[\d,]*(?:\.\d+)?\)?%?(?![\w])")
+RE_SERIAL_LINE = re.compile(r"^\s*\(?\d{1,3}\s*[.)]?\s+\S")      # the previous line starts with a serial number too
 RE_REF = re.compile(r"(page|pages|regulation|section|rule|rules|order|schedule|clause|article|chapter|annexure|note|form|item|"
-                    r"sl\.?|sr\.?|no\.)s?\s*$", re.I)
+                    r"sl\.?|sr\.?|no\.)(?:\s?s)?\s*$", re.I)     # "Regulation s 17": the model splits the plural
 STOPCAPS = set("""our the this that these those any each such all further however also in on of and for to a an as at by from with
 company company's companies equity share shares board director directors promoter promoters group issue offer draft red herring prospectus
 sebi icdr regulations regulation act rules india indian limited net proceeds fresh risk risks factor factors section sections annexure
@@ -112,6 +113,10 @@ def figures(text):
         line_start = t.rfind("\n", 0, m.start()) + 1
         if re.fullmatch(r"\s*\(?", t[line_start:m.start()]) and re.match(r"\s*[.)]\s", t[m.end():m.end() + 2] or ""):
             continue                                  # "12. We depend on ..." numbering
+        if re.fullmatch(r"\d{1,3}", raw) and re.fullmatch(r"\s*", t[line_start:m.start()]) and re.match(r"\s+[A-Z]", t[m.end():m.end() + 3]):
+            prev = [ln for ln in t[:max(0, line_start - 1)].split("\n") if ln.strip()][-1:]
+            if prev and RE_SERIAL_LINE.search(prev[0]):
+                continue                              # a serial number in a numbered run, its dot lost: "18. X" then "19 Y"
         if m.group(0).endswith(")") and "(" not in m.group(0) and re.fullmatch(r"\d{1,3}", digits):
             continue                                  # "; 22) Considering ..." numbering inside a paragraph
         d0 = m.start() + re.search(r"\d", m.group(0)).start()

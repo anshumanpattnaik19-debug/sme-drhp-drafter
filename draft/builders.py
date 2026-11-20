@@ -27,6 +27,50 @@ class Ctx:
     files: list
     tables: list
     blocks: dict          # file_id -> [block]
+    _index: object = None
+    _corpus: object = None
+    _notes: object = None
+
+    def note_sections(self):
+        """The management's business note, split at its own numbered headings ("3. Business segments"): [(heading, text)].
+        Tables are flattened to rows. Empty when the issuer gave no business note."""
+        if self._notes is None:
+            import re as _re
+            head = _re.compile(r"^\d{1,2}\.\s+([A-Z][^.]{2,90})$")
+            out = []
+            for f in self.files:
+                if f.get("doc_type") != "business_note":
+                    continue
+                cur = None
+                for b in self.blocks.get(f["id"], []):
+                    t = (b.get("text") or "").strip()
+                    m = head.match(t) if b.get("kind") == "text" and len(t.split()) <= 14 else None
+                    if m:
+                        cur = [m.group(1).strip(), []]
+                        out.append(cur)
+                    elif cur is not None and t:
+                        cur[1].append(t.replace("\n", " ; ") if b.get("kind") == "table" else t)
+            self._notes = [(h, " ".join(parts)) for h, parts in out]
+        return self._notes
+
+    def corpus(self):
+        """Every word the issuer's files, facts and offer details contain, compacted to lower-case letters and digits, so
+        an organisation name can be looked up even where a PDF lost its spaces."""
+        if self._corpus is None:
+            import json
+            import re as _re
+            parts = [b.get("text", "") for bl in self.blocks.values() for b in bl]
+            parts += [f"{f.get('label', '')} {f.get('value', '')}" for f in self.facts]
+            parts += [json.dumps(self.offer, ensure_ascii=False), self.project.get("name", "")]
+            self._corpus = _re.sub(r"[^a-z0-9]", "", " ".join(parts).lower())
+        return self._corpus
+
+    def index(self):
+        """The retrieval index over this project's files, built once (rag/index.py)."""
+        if self._index is None:
+            from rag.index import ProjectIndex
+            self._index = ProjectIndex(self)
+        return self._index
 
     @property
     def offer(self):

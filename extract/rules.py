@@ -46,6 +46,9 @@ def _clean_num(s: str) -> float | None:
     return -v if neg else v
 
 
+SHORT_TEXT_WORDS = 40       # was 12: cut "Nagpur - 440 010, Maharashtra" to "Nagpur - 440" (dry run, 19 Nov 2026)
+
+
 def infer_type(value: str) -> tuple[str, str, str]:
     """(type, normalised value, unit) for a raw cell or value string."""
     v = value.strip()
@@ -68,7 +71,7 @@ def infer_type(value: str) -> tuple[str, str, str]:
         return "person", v, ""
     if RE_ENTITY.search(v) and len(v.split()) <= 10:
         return "entity", v, ""
-    return "short_text", " ".join(v.split()[:12]), ""
+    return "short_text", " ".join(v.split()[:SHORT_TEXT_WORDS]), ""
 
 
 def _label(s: str) -> str:

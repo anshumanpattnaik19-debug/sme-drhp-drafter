@@ -26,18 +26,20 @@ PH = "[●]"
 RE_FIGURE = re.compile(r"(?<![A-Za-z0-9/.])(\d{1,3}(?:,\d{2,3})+(?:\.\d+)?|\d+\.\d+|\d{3,})(?![A-Za-z0-9/]|\.\d)")
 RE_YEAR = re.compile(r"^(19|20)\d{2}$")
 RE_ANYNUM = re.compile(r"\d[\d,]*(?:\.\d+)?")
-RE_PAGE_REF = re.compile(r"\bpages?\s+(?:no\.?\s*)?\d+(?:\s*(?:,|and|&|to|-|–)\s*\d+)*", re.I)
+RE_PAGE_REF = re.compile(r"\bpages?\s+(?:no\.?\s*)?(?:\|\s*)?\d+(?:\s*\|)?(?:\s*(?:,|and|&|to|-|–)\s*\d+)*", re.I)
 # 1-2 digit numbers that state a fact: "aged 45", "15 years of experience", "12%", "₹ 5 lakhs"
 COUNT_NOUNS = (r"personnel|employees|staff|workers|labou?rers|engineers|professionals|units|machines|branches|outlets|"
                r"stores|showrooms|warehouses|customers|clients|distributors|dealers|vendors|suppliers|directors|members|"
                r"shareholders|plants|factories|offices|locations|countries|states|cities|districts|projects|products|"
-               r"vehicles|trucks|beds|rooms|acres|hectares|days|hours")
+               r"vehicles|trucks|beds|rooms|acres|hectares|days|hours|kms?|kilomet(?:re|er)s?|met(?:re|er)s|miles|sq\.? ?ft|sq\.? ?m")
 RE_SMALL = re.compile(r"(?:\baged?\s+(?:about\s+|of\s+)?|\bage\s+of\s+)(\d{1,2})\b"
                       r"|(?<![\w.,/])(\d{1,2}(?:\.\d+)?)(?=\s?%|\s*(?:years?|yrs\.?|months?)\b)"
                       r"|(?:₹|Rs\.?|INR)\s?(\d{1,2}(?:\.\d+)?)(?![\d,.])"
-                      rf"|(?<![\w.,/])(\d{{1,2}})(?=\s+(?:(?:new|more|additional|skilled|full[- ]time)\s+)?(?:{COUNT_NOUNS})\b)", re.I)
+                      rf"|(?<![\w.,/])(\d{{1,2}})(?=\s+(?:(?:new|more|additional|skilled|full[- ]time)\s+)?(?:{COUNT_NOUNS})\b"
+                      rf"|\s+(?:\([^)]{{0,60}}\)\s+)?of\s+(?:our|the|its)\s+(?:{COUNT_NOUNS})\b)", re.I)
 # licence, registration and certificate numbers: a digit and a separator, such as EIC/1105/18/000299 or 10012022000123
 RE_FY = re.compile(r"\bFY\s?(\d{4}|\d{2})(?:\s*(?:-|–|to)\s*(?:FY\s?)?(\d{4}|\d{2}))?(?!\d)", re.I)
+RE_SLASHNUM = re.compile(r"(?<![\w/.])\d{1,4}(?:/\d{1,4}){2,}(?![\w/])")     # 34/97/98: a reference number, not a date
 RE_IDENT = re.compile(r"(?<![\w/-])(?=[A-Z0-9/-]*\d)(?:[A-Z0-9]+[/-]){1,}[A-Z0-9]+(?![\w/-])|\b(?=[A-Z]*\d)[A-Z0-9]{10,}\b")
 # address numbers: "Plot No. 28/29", "Sector - 18", "Survey No. 112/1A"
 RE_ADDR = re.compile(r"\b(?:Plot|Sector|Survey|Khasra|Gat|Ward|Door|Shop|Flat|House|Block|Gala|Unit)\s*(?:No\.?|Nos\.?)?\s*[-:.]?\s*"
@@ -104,6 +106,14 @@ class Known:
     def __init__(self, facts, offer=None, context=""):
         texts = [str(f["value"]) for f in facts] + _offer_texts(offer) + [context]
         self.numbers = known_values(facts, offer, context)
+        self.percents = set()                      # a "22%" claim is grounded by a percentage, not by any 22 in the inputs
+        for f in facts:
+            if f.get("type") == "percent" or f.get("unit") == "%":
+                k = num_key(f.get("value"))
+                if k is not None:
+                    self.percents.add(k)
+        for t in texts:
+            self.percents |= {num_key(x) for x in re.findall(r"(\d+(?:\.\d+)?)\s?%", str(t))} - {None}
         self.dates = set().union(*(parse_dates(t) for t in texts)) if texts else set()
         self.words = {w.lower() for t in texts for w in RE_WORD.findall(t)}
         self.text = "\n".join(texts).lower()
@@ -156,17 +166,24 @@ def scan(text, known):
             found.append({"kind": "identifier", "start": m.start(), "end": m.end(), "raw": raw,
                           "grounded": raw.lower() in known.text})        # FY "2023-24" is a period, not an identifier
             taken.append(m.span())
+    for m in RE_SLASHNUM.finditer(text):
+        if free(*m.span()) and not parse_dates(m.group(0)):
+            found.append({"kind": "identifier", "start": m.start(), "end": m.end(), "raw": m.group(0),
+                          "grounded": m.group(0).lower() in known.text})
+            taken.append(m.span())
     for m in RE_FIGURE.finditer(text):
         raw, k = m.group(1), num_key(m.group(1))
         if k is None or RE_YEAR.match(raw) or not free(*m.span(1)):
             continue
-        found.append({"kind": "figure", "start": m.start(1), "end": m.end(1), "raw": raw, "grounded": k in known.numbers})
+        pool = known.percents if text[m.end(1):m.end(1) + 2].strip().startswith("%") else known.numbers
+        found.append({"kind": "figure", "start": m.start(1), "end": m.end(1), "raw": raw, "grounded": k in pool})
         taken.append(m.span(1))
     for m in RE_SMALL.finditer(text):
         g = next(i for i in (1, 2, 3, 4) if m.group(i))
         if free(*m.span(g)):
+            pool = known.percents if text[m.end(g):m.end(g) + 2].strip().startswith("%") else known.numbers
             found.append({"kind": "small", "start": m.start(g), "end": m.end(g), "raw": m.group(g),
-                          "grounded": num_key(m.group(g)) in known.numbers})
+                          "grounded": num_key(m.group(g)) in pool})
             taken.append(m.span(g))
     for m in RE_HON_NAME.finditer(text):
         # a flattened family table runs on: "Sandeep Dhurka Spouse’s ...", "Aanchal Sureka Brother Mr." -> the name only
@@ -200,11 +217,116 @@ def mask_ungrounded(text, facts, offer=None, context=""):
     masked = [{"kind": f["kind"], "raw": f["raw"], "context": text[max(0, f["start"] - 60):f["end"] + 40]} for f in hits]
     for f in reversed(hits):
         if f["kind"] == "page_ref":
-            rep = re.sub(r"\d.*$", PH, f["raw"])          # "page 200" -> "page [●]"
+            rep = re.sub(r"(?:\|\s*)?\d.*$", PH, f["raw"])    # "page 200" -> "page [●]", "page no. |55|" -> "page no. [●]"
         else:
             rep = PH
         text = text[:f["start"]] + rep + text[f["end"]:]
     return text, masked
+
+
+# An organisation named in model prose that no issuer file mentions is an invention (19 Nov 2026 dry run: "Our Business"
+# listed customers the issuer never had). Names ending in one of these words are checked against the issuer's own text;
+# names that recur in DRHP boilerplate (SEBI, stock exchanges, banks named in standard wording) are in data/common_entities.json.
+ENTITY_SUFFIX = r"(?:Limited|Ltd\.?|LLP|Bank|Corporation|Authority|Industries|Enterprises|Trust|Undertaking|Commission|Association|Institute|Services|Solutions)"
+RE_ENTITY_NAME = re.compile(r"(?<![A-Za-z0-9])(?:[A-Z][\w&.'’-]*\s+(?:(?:of|and|for|the|&)\s+)?){1,7}" + ENTITY_SUFFIX + r"(?![A-Za-z0-9])")
+LEAD_WORDS = {"the", "our", "its", "their", "such", "this", "that", "all", "any", "each", "both", "of", "and", "for", "with", "by",
+              "in", "at", "from", "to", "as", "also", "however", "further", "moreover", "these", "those", "other", "certain"}
+RE_ABBR = re.compile(r"^\s*\(\s*[A-Z][A-Za-z.&]{1,9}\s*\)")
+
+
+def _compact(s):
+    return re.sub(r"[^a-z0-9]", "", s.lower())
+
+
+def _common_entities():
+    global _COMMON
+    if _COMMON is None:
+        import json
+        import os
+        p = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "common_entities.json")
+        try:
+            _COMMON = {_compact(x) for x in json.load(open(p, encoding="utf-8"))}
+        except OSError:
+            _COMMON = set()
+    return _COMMON
+
+
+_COMMON = None
+
+
+def mask_unknown_entities(text, corpus, context=""):
+    """text with every organisation name that is in neither the issuer's own text (corpus: compacted, lower case) nor the
+    common DRHP names replaced by [●]; returns (text, masked) like mask_ungrounded."""
+    common, hits = _common_entities(), []
+    for m in RE_ENTITY_NAME.finditer(text):
+        words = m.group(0).split()
+        while words and words[0].lower() in LEAD_WORDS:
+            words = words[1:]
+        name = " ".join(words)
+        if len(words) < 2 or not name[:1].isupper():
+            continue
+        key = _compact(name)
+        if key in corpus or key in common:
+            continue
+        start = m.end() - len(name)
+        end = m.end()
+        tail = RE_ABBR.match(text[end:])
+        if tail:
+            end += tail.end()
+        hits.append((start, end, name))
+    masked = [{"kind": "entity", "raw": n, "context": text[max(0, s - 60):e + 40]} for s, e, n in hits]
+    for s, e, _ in reversed(hits):
+        text = text[:s] + PH + text[e:]
+    return text, masked
+
+
+# A figure in a model-written table can be real and still sit on the wrong row (19 Nov 2026 trace: the 912.07 total was written
+# against "Fees payable to the Registrar"). The presence check cannot see that. A cell's number must come from a fact whose own
+# label shares a distinctive word with the row's label, or from a passage that names that word within 100 characters of it.
+LABEL_STOP = {"fees", "fee", "payable", "total", "estimated", "expenses", "expense", "offer", "issue", "amount", "lakhs", "lakh",
+              "payment", "cost", "costs", "with", "from", "that", "this", "other", "related", "towards", "particulars", "share",
+              "shares", "percent", "equity", "company", "details", "including", "crores", "crore"}
+RE_NUMCELL = re.compile(r"[₹Rs.\s]*\(?-?\d[\d,]*(?:\.\d+)?\)?\s*%?\*?")
+
+
+def _distinct(text):
+    return {w for w in re.findall(r"[a-z]{4,}", str(text).lower()) if w not in LABEL_STOP}
+
+
+def misplaced_cells(row, facts):
+    """Indexes (1 and up) of cells in a table row whose number is in the inputs but never beside this row's own label.
+    A number in no input at all is mask_ungrounded's business, not this check's."""
+    row_tok = _distinct(row[0]) if row else set()
+    if not row_tok:
+        return []
+    bad = []
+    for i, c in enumerate(row[1:], 1):
+        c = str(c).strip()
+        if not c or c == PH or not RE_NUMCELL.fullmatch(c):
+            continue
+        k = num_key(c)
+        if k is None:
+            continue
+        cands = [f for f in facts if k in _any_numbers(f.get("value", ""))]
+        if not cands:
+            continue
+        ok = False
+        for f in cands:
+            if f.get("origin") == "passage" or f.get("type") == "text":
+                val = str(f.get("value", ""))
+                raw = c.replace("%", "").strip()
+                spots = list(re.finditer(re.escape(raw), val))
+                if not spots or any(row_tok & _distinct(val[max(0, m.start() - 100):m.end() + 100]) for m in spots):
+                    ok = True
+            else:
+                ft = _distinct(f.get("label", ""))
+                if row_tok & ft:                       # a generic label ("Total estimated offer expenses") fits no specific row
+                    ok = True
+            if ok:
+                break
+        if not ok:
+            bad.append(i)
+    return bad
 
 
 def verify_section(key, draft, facts, offer):
@@ -293,8 +415,26 @@ def _consistency(facts):
     return out
 
 
+def platform_issue(project, facts):
+    """The listing platform is chosen when the project is created; the issuer's own files may name the other one."""
+    board = (project.get("offer") or {}).get("board") or project.get("board") or "bse_sme"
+    text = lambda f: f"{f.get('value', '')} {f.get('snippet', '')}"      # noqa: E731
+    nse = sum(bool(re.search(r"NSE Emerge|Emerge platform", text(f), re.I)) for f in facts)
+    bse = sum(bool(re.search(r"BSE SME", text(f), re.I)) for f in facts)
+    other = ("nse_emerge", "NSE Emerge", "BSE SME") if board == "bse_sme" and nse >= 2 and nse > bse else             ("bse_sme", "BSE SME", "NSE Emerge") if board == "nse_emerge" and bse >= 2 and bse > nse else None
+    if not other:
+        return None
+    return {"severity": "high", "kind": "inconsistency", "field": "platform", "suggest": other[0],
+            "title": f"Listing platform: the files name {other[1]}, the project is set to {other[2]}",
+            "detail": f"{max(nse, bse)} extracted fact(s) mention {other[1]} and {min(nse, bse)} mention {other[2]}. "
+                      "Check the Offer details and switch the platform if the files are right."}
+
+
 def review_pack(project, files, facts, drafts):
     issues = []
+    pi = platform_issue(project, facts)
+    if pi:
+        issues.append(pi)
     present = {f.get("doc_type") for f in files if f.get("status") == "processed"}
     for sec in SECTIONS:
         missing = [n for n in sec["needs"] if n not in present]
@@ -335,7 +475,8 @@ def review_pack(project, files, facts, drafts):
         if v.get("narrative_pending"):
             issues.append({"severity": "medium", "kind": "narrative", "section": key,
                            "title": f"{title}: {v['narrative_pending']} sub-heading(s) need prose",
-                           "detail": "Shown as drafting briefs. Connect the fine-tuned SLM in Settings, or write them in the editor."})
+                           "detail": "Shown as drafting briefs: the model was not connected, or no passage in the issuer's files covers the "
+                                     "sub-heading, so it was not written rather than invented. Add the input, or write them in the editor."})
         for c in v.get("checklist", []):
             st = c.get("status", "covered" if c["covered"] else "missing")
             if st == "missing":

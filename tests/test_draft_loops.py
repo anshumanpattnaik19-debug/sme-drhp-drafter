@@ -93,7 +93,9 @@ def test_write_section_trims_a_looping_draft_and_reports_it():
     from draft.builders import Ctx
     from draft.writer import DRAFT_FREQUENCY_PENALTY, write_section
 
-    ctx = Ctx(project={"name": "T", "offer": {}}, facts=[], files=[], tables=[], blocks={})
+    note = {"id": "f1", "name": "note.docx", "doc_type": "business_note", "format": "docx", "status": "processed"}
+    ctx = Ctx(project={"name": "T", "offer": {}}, facts=[], files=[note], tables=[],
+              blocks={"f1": [{"kind": "text", "loc": "p. 1", "text": "The offer document describes our business and the offer."}]})
     seen = []
 
     def looping_model(messages, frequency_penalty=0.0):
@@ -113,3 +115,78 @@ def test_a_deployment_row_that_does_not_add_up_is_masked_not_stated():
     assert _row_mismatch(["Total", "1,244.00", "2586.00", "4,230.00"]) is True
     assert _row_mismatch(["Solar", "-", "-", "520.00"]) is True
     assert _row_mismatch(["Total", "[●]", "2586.00", "4,230.00"]) is False
+
+
+def test_a_sub_heading_the_files_do_not_speak_to_is_not_written_by_the_model():
+    from draft.builders import Ctx
+    from draft.writer import write_section
+
+    note = {"id": "f1", "name": "note.docx", "doc_type": "business_note", "format": "docx", "status": "processed"}
+    ctx = Ctx(project={"name": "T", "offer": {}}, facts=[], files=[note], tables=[],
+              blocks={"f1": [{"kind": "text", "loc": "p. 1", "text": "Business overview: we build substations and lay distribution lines for utilities."}]})
+    called = []
+
+    def model(messages, frequency_penalty=0.0):
+        called.append(messages[-1]["content"])
+        return "Invented prose.", {}
+
+    out = write_section("business", ctx, model)
+    assert not any("SUB-HEADING: Manufacturing Process" in c for c in called)           # nothing in the files about it
+    assert "Manufacturing Process" in out["narrative_pending"]             # left as a brief for the reviewer
+    assert any("we build substations" in c for c in called)                # the issuer's own passage reached the model
+
+
+def test_our_business_uses_the_issuers_own_note_headings_and_nothing_static():
+    from draft.builders import Ctx
+    from draft.writer import write_section
+
+    note = {"id": "f1", "name": "note.docx", "doc_type": "business_note", "format": "docx", "status": "processed"}
+    blocks = [{"kind": "text", "loc": "para 1", "text": "1. Overview"},
+              {"kind": "text", "loc": "para 2", "text": " ".join(["We are an electrical EPC contractor for substations."] * 8)},
+              {"kind": "text", "loc": "para 3", "text": "2. Order book"},
+              {"kind": "text", "loc": "para 4", "text": " ".join(["The order book is spread over several states."] * 8)}]
+    ctx = Ctx(project={"name": "T", "offer": {}}, facts=[], files=[note], tables=[], blocks={"f1": blocks})
+    asked = []
+
+    def model(messages, frequency_penalty=0.0):
+        asked.append(next(l for l in messages[-1]["content"].split("\n") if l.startswith("SUB-HEADING:")))
+        return "Written from the note.", {}
+
+    out = write_section("business", ctx, model)
+    assert asked == ["SUB-HEADING: Overview", "SUB-HEADING: Order book"]
+    heads = [b["text"] for b in out["blocks"] if b["type"] == "heading"]
+    assert heads == ["Overview", "Order book"] and "Manufacturing Process" not in heads
+
+
+def test_note_passages_end_where_a_sentence_ends_and_a_broken_line_is_joined():
+    from draft.writer import _join_split_sentences, note_passages
+
+    t = "The order book was large. It grew in the year; the pipeline is strong. A third sentence follows here."
+    assert all(p.rstrip().endswith((".", ";")) for p in note_passages(t, words=8))
+    got = _join_split_sentences([{"type": "paragraph", "text": "Margins depend on crews"},
+                                 {"type": "paragraph", "text": "and timely billing."}])
+    assert [b["text"] for b in got] == ["Margins depend on crews and timely billing."]
+
+
+def test_a_figure_split_from_its_sentence_is_joined_back():
+    from draft.writer import _join_split_sentences
+
+    P = lambda t: {"type": "paragraph", "text": t}          # noqa: E731
+    got = _join_split_sentences([P("In FY 2025-26 revenue was \u20b9 11,418.75 lakhs (FY 2023-24:"), P("\u20b9 7,215.60 lakhs), EBITDA 13%."),
+                                 P("Borrowings were \u20b9"), P("2,612.00 lakhs."), P("The order book is large."), P("It grows.")])
+    assert [b["text"] for b in got] == ["In FY 2025-26 revenue was \u20b9 11,418.75 lakhs (FY 2023-24: \u20b9 7,215.60 lakhs), EBITDA 13%.",
+                                        "Borrowings were \u20b9 2,612.00 lakhs.", "The order book is large.", "It grows."]
+
+
+def test_a_prompt_longer_than_the_window_loses_its_lowest_ranked_inputs_first():
+    from draft.writer import est_tokens, fit_messages
+
+    facts = [{"type": "short_text", "label": f"F{i}", "value": "x " * 400} for i in range(40)]
+    passages = [{"type": "text", "label": f"P{i}", "value": "y " * 400} for i in range(6)]
+    build = lambda ps, rs: [{"role": "user", "content": " ".join(f["value"] for f in ps + rs)}]            # noqa: E731
+    msgs, dropped = fit_messages(build, passages, facts, budget=9000)
+    assert dropped > 0 and sum(est_tokens(m["content"]) for m in msgs) <= 9000
+    small, none = fit_messages(build, passages[:1], facts[:5], budget=9000)
+    assert none == 0                                                      # what fits is left alone
+    hopeless, _ = fit_messages(build, passages, facts, budget=10)
+    assert len(hopeless[0]["content"].split()) == 400 * (5 + 1)           # the first passage and five facts always stay

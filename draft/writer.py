@@ -12,10 +12,13 @@ import re
 import time
 
 from data.prompts import drafting_messages, summary_of, trim_repeats
-from verify.checks import RE_FIGURE, mask_ungrounded, num_key
+from verify.checks import RE_FIGURE, mask_ungrounded, mask_unknown_entities, misplaced_cells, num_key
+from verify.places import mask_unknown_places
 from extract.canonical import current
 from extract.tables import find, tables_from_blocks
 from .builders import Build, Ctx, build, table_block
+from .derive import derive_facts
+from .slots import unknown_facts
 from .outline import SECTION_BY_KEY
 from .red_flags import risk_factors
 from .router import route
@@ -24,8 +27,110 @@ ROUTER_K_INFER = 40      # facts per sub-heading at inference; training inputs a
 # Decoding penalty for drafts, the value the drafting evaluations used (vm/predict_qa.py, vm/rag_eval.py). It lowers
 # loops but does not remove them (MODEL_CARD: 19% of drafts still loop), so trim_repeats cuts what remains.
 DRAFT_FREQUENCY_PENALTY = 0.3
+# Best of n (19 Nov 2026 fix plan 1.3): the endpoint writes n drafts of a sub-heading in one request, each is checked, and the
+# one with the fewest masked values is kept (a looping draft loses a tie). vLLM shares the prompt across the n samples, so the
+# cost is far below n times. 1 turns it off; a model client without n support always writes one draft.
+DRAFT_BEST_OF = 3
+BEST_OF_TEMPERATURE = 0.3
 
 PH = "[●]"
+
+# The typed facts the router returns are numbers, dates and short labels. For a business or history sub-heading they carry
+# no description of what the issuer does, and a model given only those fills the gap from what it memorised in training
+# (19 Nov 2026 dry run: "Our Business" described a manufacturer in Hyderabad; the issuer is an EPC contractor in Nagpur).
+# So each narrative sub-heading also gets the issuer's own best-matching passages as facts, and a sub-heading the files
+# do not speak to is not written: it stays a drafting brief and is listed in the review pack.
+PASSAGE_FACTS = 4
+PASSAGE_WORDS = 90
+# The model's window is 32,768 tokens (the base model's native length; serve/runpod.py MAX_MODEL_LEN). A prompt is kept
+# inside it: tokens are estimated at 3.2 characters each (an over-count for English, so it errs on the safe side), room
+# is kept for the answer, and when the prompt is still too long the lowest-ranked facts and then passages are dropped.
+CONTEXT_TOKENS = 32768
+ANSWER_RESERVE = 3500 + 300           # max_tokens for a draft (the app's default is 3,000) and the chat template
+
+
+def est_tokens(text):
+    return int(len(text) / 3.2) + 1
+
+
+def fit_messages(build, passages, routed, budget=CONTEXT_TOKENS - ANSWER_RESERVE):
+    """build(passages, routed) -> messages. Drops facts from the low-ranked end, then passages, until the prompt fits
+    the budget; returns (messages, number of items dropped). The first passage and the first five facts always stay."""
+    passages, routed = list(passages), list(routed)
+    dropped = 0
+    msgs = build(passages, routed)
+    while sum(est_tokens(m["content"]) for m in msgs) > budget and (len(routed) > 5 or len(passages) > 1):
+        if len(routed) > 5:
+            routed.pop()
+        else:
+            passages.pop()
+        dropped += 1
+        msgs = build(passages, routed)
+    return msgs, dropped
+GENERIC_TERMS = {"our", "overview", "details", "general", "certain", "other", "matters", "information", "description",
+                 "summary", "key", "main", "and", "the", "of", "for", "with", "from", "about"}
+
+
+def _stem(t):
+    return re.sub(r"(ing|ed|es|s|ly)$", "", t) if len(t) > 5 else t
+
+
+SKIP_NOTE_SECTIONS = re.compile(r"borrowing|related part|litigation|financ|contents|forward|history|working capital|restated|risk|regulation|not yet|approvals", re.I)
+
+
+def business_subheads(ctx):
+    """Sub-headings for "Our Business" taken from the issuer's own business note, so an EPC contractor is not asked for
+    "Manufacturing Process" and "Raw Materials". [(heading, text)], or [] when there is no usable note."""
+    return [(h, t) for h, t in ctx.note_sections() if len(t.split()) >= 40 and not SKIP_NOTE_SECTIONS.search(h)]
+
+
+def note_passages(text, words=PASSAGE_WORDS, limit=14):
+    """The note section cut into passages of about `words` words, each ending where a sentence ends (a passage cut
+    mid-sentence is copied by the model as a broken sentence)."""
+    sents = [x for x in re.split(r"(?<=[.;:])\s+(?=[A-Z(\u20b9\u2022\d])", " ".join(text.split())) if x]
+    out, cur, n = [], [], 0
+    for x in sents:
+        cur.append(x)
+        n += len(x.split())
+        if n >= words:
+            out.append(" ".join(cur))
+            cur, n = [], 0
+    if cur:
+        out.append(" ".join(cur))
+    return out[:limit]
+
+
+def passage_facts(ctx, sub, sec, k=PASSAGE_FACTS):
+    """(facts, supported): the issuer's best passages for a sub-heading as fact dicts, and whether a passage that
+    contains the sub-heading's own terms exists (a "Manufacturing Process" sub-heading is unsupported for an EPC firm)."""
+    from rag.index import tokens
+    own = dict(ctx.note_sections()).get(sub) if sec.get("key") == "business" else None
+    if own:                                            # the note's own section, in order, is the best input there is
+        return [{"id": f"n{i}", "type": "text", "label": f"Business note · {sub}", "value": p, "file_name": "business note",
+                 "loc": sub, "snippet": p[:240], "origin": "passage"} for i, p in enumerate(note_passages(own))], True
+    try:
+        ix = ctx.index()
+    except Exception:                                  # noqa: BLE001  no index: fall back to typed facts alone
+        return [], True
+    query = f"{sub} {sec['query']}"
+    hits = ix.search(query, k=k, kinds=("passage",), doc_types=set(sec["needs"]) or None)
+    if len(hits) < k:
+        seen = {h.chunk.id for h in hits}
+        hits += [h for h in ix.search(query, k=k, kinds=("passage",)) if h.chunk.id not in seen][: k - len(hits)]
+    terms = {_stem(t) for t in tokens(sub) if len(t) >= 4 and t.isalpha() and t not in GENERIC_TERMS}
+    supported = not terms
+    out = []
+    for h in hits[:k]:
+        words = h.chunk.text.split()
+        text = " ".join(words[:PASSAGE_WORDS])
+        have = {_stem(t) for t in tokens(h.chunk.text)}
+        if terms and len(terms & have) >= (len(terms) if len(terms) <= 3 else round(0.6 * len(terms))):
+            supported = True
+        out.append({"id": f"p{h.chunk.id}", "type": "text", "label": f"{h.chunk.file_name} {h.chunk.loc}".strip(),
+                    "value": text, "file_id": h.chunk.file_id, "file_name": h.chunk.file_name, "loc": h.chunk.loc,
+                    "snippet": text[:240], "origin": "passage"})
+    return out, supported
+
 
 # ---------- helpers ----------
 
@@ -206,6 +311,12 @@ VALUE = r"(?:-|\[●\]|[\d,]+(?:\.\d+)?)"
 RE_TABLE_ROW = re.compile(rf"^(?P<label>.*?[A-Za-z\)\]].*?)\s+(?P<vals>{VALUE}(?:\s+{VALUE})*)\s*\*?$")
 
 
+# "• Resumption of directorship from December 17, 2025" is a sentence ending in a date, not a row "label 17, 2025": the
+# 19 Nov 2026 test drafts of "Management" were split into cells ("December | 17, | 2025") by this conversion.
+RE_MONTH_END = re.compile(r"\b(?:January|February|March|April|May|June|July|August|September|October|November|December|"
+                          r"Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\.?$", re.I)
+
+
 def _rows_to_tables(blocks):
     """The model sometimes writes a table as plain lines: "Label 1,244.00 616.00 1,860.00", one line per row, with a
     blank line between the rows. A run of two or more such paragraphs with the same number of values becomes a table
@@ -216,7 +327,7 @@ def _rows_to_tables(blocks):
         vals = None
         while j < len(blocks) and blocks[j]["type"] == "paragraph":
             m = RE_TABLE_ROW.match(blocks[j]["text"].strip())
-            if not m:
+            if not m or RE_MONTH_END.search(m["label"].strip()):
                 break
             n = len(m["vals"].split())
             if n < 2 or (vals is not None and n != vals):      # one trailing number is a sentence, not a row
@@ -236,7 +347,7 @@ def _rows_to_tables(blocks):
     return out
 
 
-RE_OPEN_END = re.compile(r"(,|\bno\.|\bpages?|\bon|\bdated|\bof|\bto|\bfor|\band)$", re.I)
+RE_OPEN_END = re.compile(r"(,|\bno\.|\bpages?|\bon|\bdated|\bof|\bto|\bfor|\band|\bwhich|\bwas|\bwere|\bis|\bare|\bby|\bin|\bat|\bwith|\bor|\bthe|\u20b9|\bRs\.?)$", re.I)
 
 
 def _row_mismatch(row):
@@ -265,7 +376,9 @@ def _join_split_sentences(blocks):
     for b in blocks:
         prev = out[-1] if out else None
         if (prev and prev["type"] == "paragraph" and b["type"] == "paragraph"
-                and RE_OPEN_END.search(prev["text"].rstrip()) and re.match(r"[0-9a-z(]", b["text"])):
+                and (prev["text"].count("(") > prev["text"].count(")") and not b["text"].lstrip().startswith(("\u2022", "-", "*"))
+                     or RE_OPEN_END.search(prev["text"].rstrip()) and re.match(r"[0-9a-z(\u20b9]", b["text"])
+                     or not re.search(r"[.!?:;)\u201d\"]$", prev["text"].rstrip()) and re.match(r"[a-z]", b["text"]))):
             prev["text"] = prev["text"].rstrip() + " " + b["text"]
         else:
             out.append(b)
@@ -322,16 +435,140 @@ def attach_citations(blocks, facts):
     return blocks
 
 
-def compose(key, ctx: Ctx, llm=None):
+RE_SPLIT_DATE = re.compile(r"\b(January|February|March|April|May|June|July|August|September|October|November|December)\s*\|\s*"
+                           r"(\d{1,2}(?:st|nd|rd|th)?,?)\s*\|\s*((?:19|20)\d{2})\b")
+
+
+RE_SPACED_NUM = re.compile(r"(?<![\w,.])\d{1,3}(?:,\s+\d{2,3}){2,}(?![\w]|\s*,\s*\d)")
+
+
+def close_spaced_numbers(text, facts):
+    """A figure the model printed with spaces after its commas ("2, 85, 53, 700" for 2,85,53,700) is closed up, but only when its
+    digits equal those of a fact: a list of section numbers is never rewritten."""
+    known = {re.sub(r"\D", "", str(f.get("value", ""))) for f in facts}
+    known.discard("")
+
+    def fix(m):
+        digits = re.sub(r"\D", "", m.group(0))
+        return re.sub(r",\s+", ",", m.group(0)) if digits in known else m.group(0)
+    return RE_SPACED_NUM.sub(fix, text)
+
+
+def collapse_runs(text, keep=3):
+    """Cut a draft where one short line repeats without end ("Rs." forty times, which trim_repeats ignores for being under 25
+    characters). Returns (text, was_cut)."""
+    out, last, run = [], None, 0
+    for ln in text.split("\n"):
+        key = re.sub(r"\d+", "#", ln.strip())
+        if not key:
+            out.append(ln)
+            continue
+        run = run + 1 if key == last else 1
+        last = key
+        if run > keep:
+            return "\n".join(out).rstrip(), True
+        out.append(ln)
+    return text, False
+
+
+def guard_draft(text, s, facts, offer, company, corpus):
+    """One sub-heading's raw model text, made safe to show: cut where it loops, parsed, and every value the inputs do not
+    support masked as [●] (figures, dates, names, organisations, places; table cells also by row). Returns
+    (blocks, masked, looped): masked is the number of values hidden, which best-of-n uses to pick a draft."""
+    text = RE_SPLIT_DATE.sub(r"\1 \2 \3", text)          # "December | 17, | 2025" is a date the model put table bars in
+    text = close_spaced_numbers(text, facts)
+    text, looped = trim_repeats(text)
+    text, looped_short = collapse_runs(text)
+    looped = looped or looped_short
+    context = f"{company} {s}"
+    blocks = [blk for blk in parse_markdown(text) if blk["type"] != "heading"]
+    n = 0
+    for blk in blocks:                            # the model may not state what the inputs do not support
+        if blk["type"] == "paragraph":
+            blk["text"], blk["masked"] = mask_ungrounded(blk["text"], facts, offer, context)
+            blk["text"], ents = mask_unknown_entities(blk["text"], corpus, context)
+            blk["text"], places = mask_unknown_places(blk["text"], corpus, context)
+            blk["masked"] += ents + places
+        elif blk["type"] == "table":              # table cells are prose too: a date or figure in a header is checked
+            rows, hits = [], []
+            for r in blk.get("rows", []):
+                if blk.get("converted") and _row_mismatch(r):
+                    # the model's own deployment row does not add up: its figures are not stated until a reviewer checks
+                    hits.append({"kind": "reconciliation", "raw": " | ".join(str(c) for c in r), "context": context})
+                    r = [r[0]] + [PH] * (len(r) - 1)
+                line, m = mask_ungrounded(" | ".join(str(c) for c in r), facts, offer, context)    # one line: dates split across cells
+                parts = line.split(" | ")
+                if len(parts) == len(r):
+                    cells, hits = parts, hits + m
+                else:                                 # a mask removed a separator: fall back to cell by cell
+                    cells = []
+                    for c in r:
+                        if isinstance(c, str) and c:
+                            c, m = mask_ungrounded(c, facts, offer, context)
+                            hits += m
+                        cells.append(c)
+                for i in misplaced_cells(cells, facts):       # a real figure on another row's line
+                    hits.append({"kind": "misplaced", "raw": cells[i], "context": str(cells[0])})
+                    cells[i] = PH
+                rows.append(cells)
+            blk["rows"], blk["masked"] = rows, hits
+        n += len(blk.get("masked", []))
+    return blocks, n, looped, text
+
+
+def _facts_used(blocks, facts):
+    """How many of the supplied facts' values a guarded draft states: the tie-break of best-of-n, so that among drafts with the
+    same number of masked values the one that uses more of the issuer's facts wins."""
+    parts = []
+    for b in blocks:
+        parts.append(" ".join(str(c) for r in b.get("rows", []) for c in r) if b["type"] == "table" else b.get("text", ""))
+    low = " ".join(parts).lower()
+    vals = {str(f.get("value", "")).lower() for f in facts if len(str(f.get("value", ""))) >= 3 and str(f.get("value")) != PH}
+    return sum(v in low for v in vals)
+
+
+MIN_LENGTH_SHARE = 0.6     # a candidate shorter than this share of the median candidate is not considered
+
+
+def choose_draft(scored):
+    """Index of the draft to show from [(key, length), ...]: the lowest key, among the drafts that are not much shorter than
+    the median one. Without a length floor the rule (fewest masked values first) rewards a draft that says less: for the
+    shipped adapter 36 of 89 chosen drafts were under half the length of the longest candidate (20 Nov 2026). The floor is
+    set from the median, not the longest, so one runaway draft does not push it up."""
+    lengths = sorted(n for _, n in scored)
+    floor = MIN_LENGTH_SHARE * (lengths[len(lengths) // 2] if lengths else 0)
+    ok = [i for i, (_, n) in enumerate(scored) if n >= floor] or list(range(len(scored)))
+    return min(ok, key=lambda i: scored[i][0])
+
+
+def _generate(llm, msgs, best_of):
+    """[text, ...] from the model: best_of drafts in one request when the client supports it, else one."""
+    if best_of > 1 and getattr(llm, "supports_n", False):
+        try:
+            texts, u = llm(msgs, frequency_penalty=DRAFT_FREQUENCY_PENALTY, n=best_of, temperature=BEST_OF_TEMPERATURE)
+            return [t for t in texts if t] or [""], u
+        except RuntimeError:                      # serve.llm.ModelError: a server that refuses n still gets one draft
+            pass
+    text, u = llm(msgs, frequency_penalty=DRAFT_FREQUENCY_PENALTY)
+    return [text], u
+
+
+def compose(key, ctx: Ctx, llm=None, best_of=DRAFT_BEST_OF):
     sec = SECTION_BY_KEY[key]
+    if key == "business":
+        own = [h for h, _ in business_subheads(ctx)]
+        if own:
+            sec = {**sec, "subheads": own}
     facts = ctx.facts
     doc_types = {f["id"]: f.get("doc_type") for f in ctx.files}
     b = build(key, ctx) or Build()
     built = {s for s, _ in b.parts if s}
     narrative = list(b.narrative)
+    if key == "business" and sec["subheads"] != SECTION_BY_KEY[key]["subheads"]:
+        narrative = [s for s in narrative if s in sec["subheads"]]     # the static manufacturer headings do not apply
     if sec["writer"].startswith("slm"):
         narrative += [s for s in (sec["subheads"] or [sec["title"]]) if s not in built and s not in narrative]
-    engine, usage, prose, looped = "code", {}, {}, []
+    engine, usage, prose, looped, trimmed = "code", {}, {}, [], []
     if narrative and llm is not None:
         # one call per sub-heading, in the format the student is trained on (data/prompts.py)
         outline = _order(sec, b, narrative)
@@ -342,34 +579,32 @@ def compose(key, ctx: Ctx, llm=None):
                 continue
             routed = [f for f in route(facts, f"{s} {sec['query']}", sec["needs"], k=ROUTER_K_INFER, doc_types=doc_types)
                       if not f.get("superseded")]
-            msgs = drafting_messages(ctx.company(), sec["title"], outline, s, routed, summary_of(prev) if prev else "")
-            text, u = llm(msgs, frequency_penalty=DRAFT_FREQUENCY_PENALTY)
+            passages, supported = passage_facts(ctx, s, sec)
+            if not supported:                       # the files say nothing about this sub-heading: do not let the model invent it
+                prev = ""
+                continue
+            extras = unknown_facts(s, sec["title"], passages + routed) + derive_facts(routed, s, sec["title"])
+            msgs, cut = fit_messages(lambda ps, rs: drafting_messages(ctx.company(), sec["title"], outline, s, extras + ps + rs,
+                                                                      summary_of(prev) if prev else ""), passages, routed)
+            if cut:
+                trimmed.append(s)                   # the input was longer than the window: lowest-ranked items were left out
+            cands, u = _generate(llm, msgs, best_of)
             for k, v in (u or {}).items():
                 usage[k] = usage.get(k, 0) + (v if isinstance(v, (int, float)) else 0)
-            # a greedy-decoded draft can loop on one sentence; cut it where the loop starts (data/prompts.py)
-            text, cut = trim_repeats(text)
-            if cut:
-                looped.append(s)
-            prose[s] = [blk for blk in parse_markdown(text) if blk["type"] != "heading"]
-            for blk in prose[s]:                      # the model may not state what the inputs do not support
-                if blk["type"] == "paragraph":
-                    blk["text"], blk["masked"] = mask_ungrounded(blk["text"], facts, ctx.offer, f"{ctx.company()} {s}")
-                elif blk["type"] == "table":          # table cells are prose too: a date or figure in a header is checked
-                    rows, hits = [], []
-                    for r in blk.get("rows", []):
-                        if blk.get("converted") and _row_mismatch(r):
-                            # the model's own deployment row does not add up: its figures are not stated until a reviewer checks
-                            hits.append({"kind": "reconciliation", "raw": " | ".join(str(c) for c in r),
-                                         "context": f"{ctx.company()} {s}"})
-                            r = [r[0]] + [PH] * (len(r) - 1)
-                        cells = []
-                        for c in r:
-                            if isinstance(c, str) and c:
-                                c, m = mask_ungrounded(c, facts, ctx.offer, f"{ctx.company()} {s}")
-                                hits += m
-                            cells.append(c)
-                        rows.append(cells)
-                    blk["rows"], blk["masked"] = rows, hits
+            # every value the model was shown is grounded: the typed facts, the passages and the computed or unknown facts
+            grounding = facts + passages + extras
+            scored = []
+            for t in cands:
+                blocks_t, n_masked, looped_t, text_t = guard_draft(t, s, grounding, ctx.offer, ctx.company(), ctx.corpus())
+                # a draft that did not loop first, then fewest masked values, then most of the issuer's facts used
+                # (19 Nov 2026, 89 live drafts: loops 5.6% to 0%, invented figures 6.7% to 4.5%, fact use 0.595 to 0.618)
+                scored.append(((looped_t, n_masked, -_facts_used(blocks_t, routed)), blocks_t, looped_t, text_t))
+            _, chosen, was_cut, text = scored[choose_draft([(k, len(t_)) for k, _, _, t_ in scored])]
+            if was_cut:
+                looped.append(s)                    # a greedy draft can loop on one sentence; guard_draft cut it (data/prompts.py)
+            if len(cands) > 1:
+                usage["drafts_sampled"] = usage.get("drafts_sampled", 0) + len(cands)
+            prose[s] = chosen
             prev = text
         engine = "model"
     elif narrative:
@@ -392,7 +627,7 @@ def compose(key, ctx: Ctx, llm=None):
     attach_citations(blocks, facts)
     if not blocks:
         blocks = [{"type": "note", "text": f"{PH} No input was found for this section.", "facts": []}]
-    return blocks, engine if narrative else "code", usage, b, pending, looped
+    return blocks, engine if narrative else "code", usage, b, pending, looped, trimmed
 
 
 def write_section(key, ctx: Ctx, llm=None):
@@ -402,7 +637,7 @@ def write_section(key, ctx: Ctx, llm=None):
     facts = ctx.facts
     doc_types = {f["id"]: f.get("doc_type") for f in ctx.files}
     t0 = time.perf_counter()
-    covered, missing, pending, usage, looped = [], [], [], {}, []
+    covered, missing, pending, usage, looped, trimmed = [], [], [], {}, [], []
     if sec["writer"] == "template":
         blocks, engine = write_template(key, ctx.project, facts), "template"
         b = build(key, ctx)
@@ -421,12 +656,12 @@ def write_section(key, ctx: Ctx, llm=None):
         engine = "rules"
         covered = [c for c in sec["checklist"] if any(_rf_covers(c, f) for f in flags)]
     else:
-        blocks, engine, usage, b, pending, looped = compose(key, ctx, llm)
+        blocks, engine, usage, b, pending, looped, trimmed = compose(key, ctx, llm)
         covered, missing = b.covered, b.missing
     routed = route(facts, f"{sec['title']} {sec['query']}", sec["needs"], doc_types=doc_types) if sec["query"] else []
     return {"blocks": blocks, "writer": sec["writer"], "engine": engine, "routed": [f["id"] for f in routed],
             "covered": covered, "missing": [{"item": m[0], "where": m[1]} for m in missing], "narrative_pending": pending,
-            "loop_trimmed": looped, "latency_s": round(time.perf_counter() - t0, 3), "usage": usage}
+            "loop_trimmed": looped, "context_trimmed": trimmed, "latency_s": round(time.perf_counter() - t0, 3), "usage": usage}
 
 
 RF_COVERS = {
