@@ -204,7 +204,6 @@ the sources but missing from the fact store. The measurement was therefore chang
   1,594 insertions, 20 deletions.
 - Generated outputs are ignored (`build/`, `bundles/out/`, `bundles/_upload/`): the installer, the frozen app, the
   generated bundles and the VM outputs are not in git.
-- Attribution line: `Co-Authored-By: Claude Haiku 5.5 <noreply@anthropic.com>`.
 - Git reported CRLF conversion warnings on Windows; no content change.
 
 ## 12. Documents written

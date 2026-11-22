@@ -1,6 +1,6 @@
 # Build prompt: dummy company input documents for an SME IPO (issuer grade)
 
-Paste everything below the line into a new Claude Code session. It is self-contained: the company, all its
+Paste everything below the line into a new coding-assistant session. It is self-contained: the company, all its
 data, every document to produce, and how to check the result.
 
 ---

@@ -66,7 +66,7 @@ const c = [];
 c.push(new Paragraph({ spacing: { after: 30 }, children: [new TextRun({ text: "DRHP Copilot", font: FONT, size: 44, bold: true, color: ACC })] }));
 c.push(new Paragraph({ spacing: { after: 40 }, children: [new TextRun({ text: "Fine-tuning and serving a 7B model to draft SME offer documents under verification", font: FONT, size: 26, color: INK })] }));
 c.push(new Paragraph({ spacing: { after: 120 }, border: { bottom: { style: BorderStyle.SINGLE, size: 6, color: ACC, space: 4 } },
-  children: [new TextRun({ text: "Track A capstone, technical report  |  Executive Post Graduate Programme in Generative AI and Agentic AI  |  22 November 2026  |  Team: [names]", font: FONT, size: 17, color: MUTE })] }));
+  children: [new TextRun({ text: "Track A capstone, technical report  |  Executive Post Graduate Programme in Generative AI and Agentic AI  |  23 November 2026  |  Team: [names]", font: FONT, size: 17, color: MUTE })] }));
 
 c.push(H1("Abstract"));
 c.push(P("A merchant banker's team drafts the narrative sections of a Draft Red Herring Prospectus (DRHP) for a company listing on the BSE SME platform from the files the issuer hands over. A general 7B instruct model does this badly: it writes figures, dates and names that are in no file, it fills offer terms that must stay blank at DRHP stage, and it does not cite. We adapted **Qwen2.5-7B-Instruct** with QLoRA and DPO to three skills (draft a sub-section from typed facts, extract typed facts from passages, answer questions with citations and guardrails), wrapped it in a verification layer that masks every value the inputs do not support as `[●]`, and serve it behind a FastAPI app on RunPod."));

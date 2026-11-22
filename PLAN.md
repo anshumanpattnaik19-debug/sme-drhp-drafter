@@ -10,7 +10,7 @@ This replaces the pitchbook and data-room datasets as the main project; those st
 |---|---|
 | board | SME only |
 | inputs | PDF, Word, Excel, scanned PDF, images |
-| builder | Claude Code writes and tests all code on the laptop (no GPU); GPU steps run as Colab notebooks |
+| builder | a coding assistant writes and tests all code on the laptop (no GPU); GPU steps run as Colab notebooks |
 | GPU | **Colab Pro** (A100 for the teacher and quantisation, L4 for training and evaluation) |
 | human reviewer | **the project owner (has worked on DRHPs)**; time needed is listed in section 9 |
 | teacher | open-weight, chosen in Week 0 between Qwen3-32B and Qwen3-30B-A3B |
@@ -217,7 +217,7 @@ If a criterion fails it is reported as failed; thresholds are not moved after th
 
 ### 7.5 Issuer bundles (the real task)
 
-Five held-out test companies. Claude Code rebuilds the files an issuer would hand over from each company's
+Five held-out test companies. The coding assistant rebuilds the files an issuer would hand over from each company's
 filed document: Excel financials, Word board and shareholder resolutions, Word CVs, a litigation list, the MoA as
 PDF, one scanned certificate (rendered, skewed, noised) and one table as an image. The full pipeline runs from
 the bundle to `.docx`, and the draft is compared with the filed document. Limitation: the bundles are derived from
@@ -258,12 +258,12 @@ Client files from the reviewer's past DRHP work are not used unless their use is
 
 | actor | does |
 |---|---|
-| **Claude Code (laptop)** | all code, offline tests, the mock model server, notebook generation, data building that needs no GPU (segmenter, masking, gates, router, MinHash, bundles), reading results back and writing the report tables |
+| **Coding assistant (laptop)** | all code, offline tests, the mock model server, notebook generation, data building that needs no GPU (segmenter, masking, gates, router, MinHash, bundles), reading results back and writing the report tables |
 | **Colab Pro (run by a person)** | teacher screen and extraction, baselines, training runs, evaluation generation, judge, quantisation; notebooks write to `MyDrive/sme_drhp/runs/`, synced to the laptop with Google Drive for desktop |
 | **Reviewer (project owner)** | Week 0: label facts for 10 units from scratch (~2–3 h), fix the checklist per core section (~2 h), review a 20-row dry run (~1 h). Week 3: 50 judge-check scores and the blind comparison (~4–5 h). Bundles: add missing and contradictory items (~1 h). Total ~10–12 h |
 | **Team members** | each runs at least one training job (A, B, ablation, seeds are 5 jobs; the 6th member runs the DPO or the AWQ export), and each can explain their part in the demo |
 
-If the course's SSH GPU machine is available, Claude Code can run the GPU steps there directly and the Colab
+If the course's SSH GPU machine is available, the coding assistant can run the GPU steps there directly and the Colab
 hand-offs disappear. Check the programme's policy on AI-written code before submission.
 
 **Built-in checks for AI-written code:** every stage has offline tests (the earlier projects have 26–55 each);

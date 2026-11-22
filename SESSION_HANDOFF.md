@@ -111,6 +111,6 @@ grounding +0.03 (p = 0.03), distractor leakage −0.11 (p = 0.05), fact use +0.0
 
 ## Rules
 
-* Never mark content as drafted by Claude or an AI in reviewer materials (labels workbook, review files).
+* Never mark content as drafted by an AI in reviewer materials (labels workbook, review files).
 * Keep `FAILURE_LOG.md` current: every failure, its cause and its status.
 * Tests: `python -m pytest -q tests` (60 pass).

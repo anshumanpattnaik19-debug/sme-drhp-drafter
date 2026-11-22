@@ -26,7 +26,7 @@ npm run build      # writes ui/dist
 
 | screen | what the user does |
 |---|---|
-| Assistant | chat about the project (Claude-style); also a panel on every screen (**Ask** button or Ctrl+J). Answers cite the issuer's files; commands such as *draft Our Business* or *fill offer details from the documents* run directly |
+| Assistant | chat about the project (chat-style); also a panel on every screen (**Ask** button or Ctrl+J). Answers cite the issuer's files; commands such as *draft Our Business* or *fill offer details from the documents* run directly |
 | Projects | create one project per issuer (name, BSE SME / NSE Emerge, lead manager) |
 | Documents | drag files or a whole folder; each file is read (PDF, scanned PDF, Word, Excel, images), classified and its facts extracted; preview, extracted text with page/cell, reclassify, reprocess |
 | Offer details | board-approved terms and parties, filled automatically from the note on the proposed issue, intermediaries and KMP schedules after processing (each value shows its file); DRHP-stage fields stay `[●]` |
