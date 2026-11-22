@@ -183,7 +183,8 @@ function BlockEditor({ blocks, onChange }: { blocks: DraftBlock[]; onChange: (b:
             </div>
           ) : b.type === "brief" ? (
             <div className="rounded-md border border-dashed border-warning/50 bg-warning-soft/40 p-3 font-sans text-[12.5px]">
-              <div className="font-semibold text-warning">Drafting brief: {b.sub}</div>
+              <div className="font-semibold text-warning">{b.missing ? `Not in the issuer's files: ${b.sub}` : `Drafting brief: ${b.sub}`}</div>
+              {b.missing && <div className="mt-1 text-fg-muted">{b.text}</div>}
               <ul className="mt-1 space-y-0.5 text-fg-muted">
                 {(b.items || []).slice(0, 8).map((it) => <li key={it.fact_id}>{it.label}: <b className="text-fg">{it.value}</b></li>)}
               </ul>

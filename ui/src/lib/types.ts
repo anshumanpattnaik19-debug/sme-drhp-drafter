@@ -176,6 +176,7 @@ export interface DraftBlock {
   sources?: Source[];
   items?: BriefItem[];
   sub?: string;
+  missing?: boolean;
   flag?: string;
   template?: boolean;
 }

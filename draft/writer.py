@@ -12,11 +12,12 @@ import re
 import time
 
 from data.prompts import drafting_messages, summary_of, trim_repeats
-from verify.checks import RE_FIGURE, mask_ungrounded, mask_unknown_entities, misplaced_cells, num_key
+from verify.claims import mask_event_dates, mask_future_dates, mask_malformed_amounts, mask_period_claims, mask_unit_claims
+from verify.checks import RE_FIGURE, mask_misbased_percents,mask_ungrounded, mask_unknown_entities, misplaced_cells, num_key
 from verify.places import mask_unknown_places
 from extract.canonical import current
 from extract.tables import find, tables_from_blocks
-from .builders import Build, Ctx, build, table_block
+from .builders import NBSP, Build, Ctx, build, protect_abbrev, table_block
 from .derive import derive_facts
 from .slots import unknown_facts
 from .outline import SECTION_BY_KEY
@@ -24,9 +25,13 @@ from .red_flags import risk_factors
 from .router import route
 
 ROUTER_K_INFER = 40      # facts per sub-heading at inference; training inputs are own facts + about as many distractors
-# Decoding penalty for drafts, the value the drafting evaluations used (vm/predict_qa.py, vm/rag_eval.py). It lowers
-# loops but does not remove them (MODEL_CARD: 19% of drafts still loop), so trim_repeats cuts what remains.
-DRAFT_FREQUENCY_PENALTY = 0.3
+# Decoding penalty for drafts. 0.3 was chosen on the first adapter, which looped in 19% of drafts. With the shipped adapter (DPO) it
+# also makes the model reword the source: on a data room whose business note it copies from, the model dropped small words
+# ("technical commercial comparison utilities inspect transformers switchgear") and added details the note does not have
+# ("established at contract inception"). On the 89 test drafts (22 Nov 2026, one run each, three drafts per request, guarded):
+#   0.3: fact use 0.659, loops 0.0%   0.1: fact use 0.714, loops 1.1%   0.0: fact use 0.686, loops 2.2%, slower
+# and 0 of 89 drafts with an invented figure after the guard at all three. 0.1 is used; trim_repeats cuts the loops that remain.
+DRAFT_FREQUENCY_PENALTY = 0.1
 # Best of n (19 Nov 2026 fix plan 1.3): the endpoint writes n drafts of a sub-heading in one request, each is checked, and the
 # one with the fewest masked values is kept (a looping draft loses a tie). vLLM shares the prompt across the n samples, so the
 # cost is far below n times. 1 turns it off; a model client without n support always writes one draft.
@@ -87,7 +92,7 @@ def business_subheads(ctx):
 def note_passages(text, words=PASSAGE_WORDS, limit=14):
     """The note section cut into passages of about `words` words, each ending where a sentence ends (a passage cut
     mid-sentence is copied by the model as a broken sentence)."""
-    sents = [x for x in re.split(r"(?<=[.;:])\s+(?=[A-Z(\u20b9\u2022\d])", " ".join(text.split())) if x]
+    sents = [x.replace(NBSP, ' ') for x in re.split(r'(?<=[.;:]) +(?=[A-Z(\u20b9\u2022\d])', protect_abbrev(' '.join(text.split()))) if x]
     out, cur, n = [], [], 0
     for x in sents:
         cur.append(x)
@@ -100,6 +105,69 @@ def note_passages(text, words=PASSAGE_WORDS, limit=14):
     return out[:limit]
 
 
+# Standard DRHP sub-headings name a kind of content, not a topic the files must repeat word for word ("Brief History" is
+# written from a note that says "incorporated on ... converted ..."). Terms like these do not count as evidence terms, and a
+# heading whose own term has a synonym is supported when a passage holds one (22 Nov 2026, Vidyunmaya data room: 14 sub-headings
+# with plenty of source text were left as stubs because no passage held the word "brief" or "history").
+GENERIC_TERMS |= {"brief", "primary", "significant", "factors", "affecting", "results", "operations", "comparison", "periods",
+                  "discussion", "analysis", "condition", "management", "profiles", "government", "corporate", "material",
+                  "financial", "business", "outstanding", "development", "developments"}
+SUPPORT_SYNONYMS = {
+    "history": ("incorporat", "milestone", "founded", "converted", "conversion"),
+    "governance": ("committee", "independent director", "audit committee", "board of directors"),
+    "approval": ("licence", "license", "registration", "certificate", "permit", "approval"),
+    "agreement": ("agreement", "contract", "arrangement", "deed"),
+    "director": ("director", "chairman", "managing director"),
+    "office": ("registered office", "leave and licence"),
+}
+# Sub-headings of other sections that the issuer's business note answers under its own heading: (section, sub-heading regex,
+# note heading regex). The note's passages come first, in order; retrieval adds what the other files hold.
+NOTE_FOR_SUB = [
+    ("history", r"history", r"history|milestone"),
+    ("history", r"agreement", r"contracts|key contract"),
+    ("summary", r"business", r"^overview$|segments"),
+    ("mdna", r".", r"discussion|restated results|snapshot|kpi"),
+    ("approvals", r".", r"approvals"),
+]
+
+
+# Sub-headings about an event are written only if some file states such an event. A file that says where the registered office is does
+# not say that it changed; the model wrote "has not changed its registered office since incorporation" (22 Nov 2026).
+REQUIRES_EVENT = [
+    (r"changes? in (?:the )?registered office",
+     r"change (?:in|of) (?:the )?registered office|registered office (?:was|has been|had been) (?:shifted|relocated|changed|transferred)|(?:shift|relocat)\w* (?:of )?(?:the )?registered office|registered office.{0,60}\b(?:shifted|relocated)\b"),
+]
+
+
+# Sub-headings that the issuer's own agreements answer: (section, sub-heading regex, document types). Their text is given as passages.
+DOC_FOR_SUB = [
+    ("history", r"agreement", ("material_agreement", "shareholder_agreement")),
+]
+
+
+def docs_for(ctx, sec_key, sub):
+    """[(file name, passage)] from the files of the document types that answer a sub-heading (DOC_FOR_SUB)."""
+    out = []
+    for key, sub_rx, types in DOC_FOR_SUB:
+        if key == sec_key and re.search(sub_rx, sub, re.I):
+            for f in ctx.files:
+                if f.get("doc_type") in types:
+                    text = " ".join(b.get("text", "") for b in ctx.blocks.get(f["id"], []) if b.get("kind") in ("text", "ocr"))
+                    out += [(f.get("name", ""), p) for p in note_passages(text, limit=4)]
+    return out[:8]
+
+
+def note_for(ctx, sec_key, sub):
+    """Passages of the business note's sections that answer a sub-heading of another section (NOTE_FOR_SUB)."""
+    out = []
+    for key, sub_rx, head_rx in NOTE_FOR_SUB:
+        if key == sec_key and re.search(sub_rx, sub, re.I):
+            for h, t in ctx.note_sections():
+                if re.search(head_rx, h, re.I):
+                    out += [(h, p) for p in note_passages(t, limit=6)]
+    return out[:10]
+
+
 def passage_facts(ctx, sub, sec, k=PASSAGE_FACTS):
     """(facts, supported): the issuer's best passages for a sub-heading as fact dicts, and whether a passage that
     contains the sub-heading's own terms exists (a "Manufacturing Process" sub-heading is unsupported for an EPC firm)."""
@@ -108,27 +176,39 @@ def passage_facts(ctx, sub, sec, k=PASSAGE_FACTS):
     if own:                                            # the note's own section, in order, is the best input there is
         return [{"id": f"n{i}", "type": "text", "label": f"Business note · {sub}", "value": p, "file_name": "business note",
                  "loc": sub, "snippet": p[:240], "origin": "passage"} for i, p in enumerate(note_passages(own))], True
+    mapped = [{"id": f"n{i}", "type": "text", "label": f"Business note · {h}", "value": p, "file_name": "business note",
+               "loc": h, "snippet": p[:240], "origin": "passage"} for i, (h, p) in enumerate(note_for(ctx, sec.get("key"), sub))]
+    mapped += [{"id": f"d{i}", "type": "text", "label": n, "value": p, "file_name": n, "loc": "", "snippet": p[:240], "origin": "passage"}
+               for i, (n, p) in enumerate(docs_for(ctx, sec.get("key"), sub))]
     try:
         ix = ctx.index()
     except Exception:                                  # noqa: BLE001  no index: fall back to typed facts alone
-        return [], True
+        return mapped, True
     query = f"{sub} {sec['query']}"
     hits = ix.search(query, k=k, kinds=("passage",), doc_types=set(sec["needs"]) or None)
     if len(hits) < k:
         seen = {h.chunk.id for h in hits}
         hits += [h for h in ix.search(query, k=k, kinds=("passage",)) if h.chunk.id not in seen][: k - len(hits)]
     terms = {_stem(t) for t in tokens(sub) if len(t) >= 4 and t.isalpha() and t not in GENERIC_TERMS}
-    supported = not terms
-    out = []
+    supported = not terms or bool(mapped)
+    syn = [s for t in terms for s in SUPPORT_SYNONYMS.get(t, ())]
+    out = list(mapped)
     for h in hits[:k]:
         words = h.chunk.text.split()
         text = " ".join(words[:PASSAGE_WORDS])
         have = {_stem(t) for t in tokens(h.chunk.text)}
         if terms and len(terms & have) >= (len(terms) if len(terms) <= 3 else round(0.6 * len(terms))):
             supported = True
+        elif syn and any(s in h.chunk.text.lower() for s in syn) and len(terms) <= 1:
+            supported = True                           # a one-term heading whose kind of content a passage holds
         out.append({"id": f"p{h.chunk.id}", "type": "text", "label": f"{h.chunk.file_name} {h.chunk.loc}".strip(),
                     "value": text, "file_id": h.chunk.file_id, "file_name": h.chunk.file_name, "loc": h.chunk.loc,
                     "snippet": text[:240], "origin": "passage"})
+    if sub == sec.get("title") and (out or mapped):
+        supported = True           # a section with one sub-heading, its own title ("Industry Overview"): written when any passage exists
+    required = next((rx for sub_rx, rx in REQUIRES_EVENT if re.search(sub_rx, sub, re.I)), None)
+    if required:                   # a sub-heading about a change is written only from a source that states one; "has not changed" is not inferred
+        supported = bool(ctx.sentences(required, None, 1))
     return out, supported
 
 
@@ -302,9 +382,78 @@ def parse_markdown(text):
         elif all(ln.strip().startswith("|") for ln in lines) and len(lines) >= 2:
             rows = [[c.strip() for c in ln.strip().strip("|").split("|")] for ln in lines if not re.match(r"^\s*\|?\s*:?-{3,}", ln)]
             blocks.append({"type": "table", "rows": rows, "text": "", "facts": []})
+        elif len(lines) >= 2 and all(ln.count(" | ") >= 1 for ln in lines):      # "Certification | Body | Valid till" without leading bars
+            rows = [[c.strip() for c in ln.split("|")] for ln in lines]
+            blocks.append({"type": "table", "rows": rows, "text": "", "facts": []})
         else:
             blocks.append({"type": "paragraph", "text": chunk, "facts": []})
-    return _rows_to_tables(_join_split_sentences(blocks))
+    return _join_pipe_header([x for b in _rows_to_tables(_join_split_sentences(blocks)) for x in _flat_table(b)])
+
+
+# A table the model wrote as one run of words: "FY 2023-24 FY 2024-25 FY 2025-26 H1 FY 2026-27 Tenders bid (number) 58 66 79 37 Value of
+# bids (₹ lakhs) 41,600.00 52,300.00 ..." (22 Nov 2026, hosted test: five of these in Business). A header of two or more period labels
+# followed by rows of "label, then as many values as there are periods" is read back into a table (two rows at least); the text after
+# the last row stays a paragraph.
+_PER = r"(?:H[12]\s+)?FY\s?\d{4}(?:-\d{2,4})?|(?:H[12]\s+)?FY\s?\d{2}\b|(?:31|30)\s+(?:March|September|June|December)\s+20\d{2}"
+RE_FLAT_HEAD = re.compile(rf"^(?P<pre>(?:[^\d\[|]{{0,60}}?))\s*(?P<hdr>(?:(?:{_PER})\s+){{2,}})(?P<rest>.+)$", re.S)
+_VAL = r"(?:-|\[●\]|\(?[\d,]+(?:\.\d+)?%?\)?)"
+
+
+def _read_rows(text, k):
+    """([label, v1..vk], ...) read from the start of text, and the position where they stop."""
+    rx = re.compile(rf"\s*(?P<label>[A-Za-z(₹][^\n]*?[A-Za-z)%\]])\s+(?P<vals>{_VAL}(?:\s+{_VAL}){{{k - 1}}})(?=\s+[A-Za-z(₹•]|\s*$)")
+    rows, pos = [], 0
+    while pos < len(text):
+        r = rx.match(text, pos)
+        if not r:
+            break
+        rows.append([r["label"].strip()] + r["vals"].split())
+        pos = r.end()
+    return rows, pos
+
+
+def _join_pipe_header(blocks):
+    """A one-line header "₹ lakhs | FY 2023-24 | FY 2024-25" followed by a paragraph that starts with rows of the same width becomes
+    one table; what follows the rows stays text."""
+    out, i = [], 0
+    while i < len(blocks):
+        b = blocks[i]
+        nxt = blocks[i + 1] if i + 1 < len(blocks) else None
+        if b["type"] == "paragraph" and nxt and nxt["type"] == "paragraph" and "\n" not in b["text"] and b["text"].count(" | ") >= 2:
+            cells = [c.strip() for c in b["text"].split("|")]
+            rows, pos = _read_rows(" ".join(nxt["text"].split()), len(cells) - 1)
+            if len(rows) >= 2:
+                text = " ".join(nxt["text"].split())
+                out.append({"type": "table", "rows": [cells] + rows, "text": "", "facts": []})
+                if text[pos:].strip():
+                    out += _flat_table({"type": "paragraph", "text": text[pos:].strip(), "facts": []})
+                i += 2
+                continue
+        out.append(b)
+        i += 1
+    return out
+
+
+def _flat_table(b):
+    if b.get("type") != "paragraph":
+        return [b]
+    text = " ".join(b["text"].split())
+    m = RE_FLAT_HEAD.match(text)
+    if not m:
+        return [b]
+    labels = re.findall(_PER, m["hdr"])
+    k = len(labels)
+    if k < 2 or k > 8:
+        return [b]
+    rest = m["rest"].strip()
+    rows, pos = _read_rows(rest, k)
+    if len(rows) < 2:
+        return [b]
+    head = [m["pre"].strip() or ""] + [re.sub(r"\s+", " ", x) for x in labels]
+    out = [{"type": "table", "rows": [head] + rows, "text": "", "facts": []}]
+    if rest[pos:].strip():                       # what follows the rows (the next heading and its text) stays a paragraph
+        out.append({"type": "paragraph", "text": rest[pos:].strip(), "facts": []})
+    return out
 
 
 VALUE = r"(?:-|\[●\]|[\d,]+(?:\.\d+)?)"
@@ -471,21 +620,142 @@ def collapse_runs(text, keep=3):
     return text, False
 
 
+
+# A draft can also degenerate without repeating a sentence, which trim_repeats and collapse_runs look for (20 Nov 2026, hosted
+# test: a list of risks ran on for some 300 words, with words split by spaces, "t o write-off s", "civil commotion s"). The text
+# is cut before the first sentence that has three or more split words, or that runs past 120 words with ten or more semicolons.
+RE_SPLIT_WORD = re.compile(r"(?<![\w'’])(?:t o|o f|i n|o n|a t|t he|th e|a nd|an d)(?![\w'’])|[A-Za-z-]{3,} s(?=[ ,;.:])")
+RE_SENTENCE = re.compile(r"[^\n]*?(?:[.!?](?=\s|$)|\n|$)")
+SPLIT_WORDS_CUT, RUNON_WORDS, RUNON_SEMICOLONS = 3, 120, 10
+
+
+def cut_degenerate(text, source=""):
+    """(text, was_cut): text cut before the first degenerate sentence (split words or an endless semicolon list). A split word
+    that the inputs themselves hold (source: their text; a PDF can read "Technologie s") is not counted. Table lines are not read."""
+    source = source.lower()
+    for m in RE_SENTENCE.finditer(text):
+        sent = m.group(0)
+        if not sent.strip() or text[text.rfind("\n", 0, m.start()) + 1:].lstrip().startswith("|"):
+            continue
+        split = [w for w in RE_SPLIT_WORD.findall(sent) if w.lower() not in source]
+        if (len(split) >= SPLIT_WORDS_CUT
+                or len(sent.split()) > RUNON_WORDS and sent.count(";") >= RUNON_SEMICOLONS):
+            return text[:m.start()].rstrip(), True
+    return text, False
+
+
+# Page footers the model learned from training documents ("13 | P a g e", "Page 4 of 120") are not prose. They are removed;
+# the numbers in them would otherwise pass the figure check whenever the inputs hold the same number.
+RE_PAGE_FOOTER = re.compile(r"[ \t]*(?:\b\d{1,4}\s*\|\s*P\s?a\s?g\s?e\b|\bP a g e(?:\s*\|?\s*\d{1,4})?\b|\bPage\s+\d{1,4}\s+of\s+\d{1,4}\b)[ \t]*")
+
+
+def strip_page_footers(text):
+    """(text, number removed)."""
+    out, n = RE_PAGE_FOOTER.subn(" ", text)
+    return (re.sub(r"(?<=\S) {2,}(?=\S)", " ", out) if n else text), n
+
+# What the model copies from a source document besides prose (22 Nov 2026, hosted test on a data room: "3.2 Electricity demand" as
+# a paragraph, "Chart 1: ..." with no chart, a "Source:" line of its own, report reference marks "[5]", a table flattened into
+# one line of fifty numbers, a header row printed twice, a spreadsheet's "Check: ... | 0 | 0" row). None of it is prose.
+RE_SECTION_NO = re.compile(r"^\d{1,2}(?:\.\d{1,2})+\.?\s+[A-Z][^.!?]{2,80}$")
+RE_CAPTION = re.compile(r"^(?:Chart|Figure|Fig\.|Table|Exhibit)\s+\d+\s*[:.\-–]")
+RE_SOURCE_LINE = re.compile(r"^Sources?\s*:", re.I)
+RE_REF_MARK = re.compile(r"[ \t]?\[\d{1,2}(?:\s*[,–-]\s*\d{1,2})*\]")
+# A letter's head copied from a certificate ("S R PANDE & CO. Chartered Accountants 501, ... Tel: ... Email: ... FRN: ... Peer Review Certificate No."),
+# which the funds-deployed certificate gave to "Funds Deployed" in the Objects draft. Three markers of a letterhead make it one.
+LETTERHEAD_MARKERS = ("tel:", "email:", "e-mail:", "frn:", "peer review certificate", "chartered accountants", "the board of directors", "sub:", "udin:")
+
+
+def _is_letterhead(t):
+    low = t.lower()
+    return sum(m in low for m in LETTERHEAD_MARKERS) >= 3
+
+
+TITLE_SMALL = {"a", "an", "at", "of", "the", "and", "in", "for", "to", "on", "by", "with", "or", "from", "as"}
+
+
+def _is_title_fragment(t):
+    """A heading copied as a paragraph ("Power Sector at a Glance ALL INDIA"): a few words, all capitalised or small words."""
+    w = t.rstrip(". ").split()
+    return 2 <= len(w) <= 9 and all(x[:1].isupper() or x.lower() in TITLE_SMALL or not x[:1].isalpha() for x in w) \
+        and not re.search(r"[,;:]|\b(?:is|are|was|were|has|have|had)\b", t)
+
+
+def _is_number_dump(t):
+    nums = re.findall(r"\d[\d,.]*", t)
+    return len(nums) >= 12 and len(nums) / max(1, len(t.split())) > 0.4
+
+
+def _repeated_halves(t):
+    w = [x.lower() for x in t.split()]
+    n = len(w)
+    return 4 <= n <= 40 and n % 2 == 0 and w[: n // 2] == w[n // 2:]
+
+
+def clean_fragments(blocks):
+    """Paragraphs of a model draft that are not prose are removed, and reference marks are stripped from the rest.
+    Returns the kept blocks; a "Source:" line is kept only after a table (it names the table's source)."""
+    from extract.rules import RE_HELPER_ROW
+    out, seen, prev_dropped = [], set(), False
+    for b in blocks:
+        if b["type"] != "paragraph":
+            out.append(b)
+            prev_dropped = False
+            continue
+        t = RE_REF_MARK.sub("", b["text"]).strip()
+        key = re.sub(r"[^a-z0-9]+", " ", t.lower()).strip()
+        drop = (not t or _is_letterhead(t) or RE_SECTION_NO.match(t) or RE_HELPER_ROW.match(t) or _is_number_dump(t) or _repeated_halves(t)
+                or (RE_CAPTION.match(t) and len(t.split()) <= 18)
+                or (_is_title_fragment(t) and RE_REF_MARK.search(b["text"]))   # a source's title with its reference mark; a name list is not
+                or (RE_SOURCE_LINE.match(t) and (prev_dropped or not out or out[-1]["type"] != "table"))
+                or (len(key) > 60 and key in seen))
+        prev_dropped = bool(drop)
+        if drop:
+            continue
+        seen.add(key)
+        out.append({**b, "text": t})
+    return out
+
+
+def dedupe_paragraphs(blocks):
+    """A paragraph that repeats an earlier one of the section word for word (two sub-headings fed the same passage) is dropped."""
+    seen, out = set(), []
+    for b in blocks:
+        if b.get("type") == "paragraph":
+            key = re.sub(r"[^a-z0-9]+", " ", b.get("text", "").lower()).strip()
+            if len(key) > 60 and key in seen:
+                continue
+            seen.add(key)
+        out.append(b)
+    return out
+
+
 def guard_draft(text, s, facts, offer, company, corpus):
     """One sub-heading's raw model text, made safe to show: cut where it loops, parsed, and every value the inputs do not
     support masked as [●] (figures, dates, names, organisations, places; table cells also by row). Returns
     (blocks, masked, looped): masked is the number of values hidden, which best-of-n uses to pick a draft."""
     text = RE_SPLIT_DATE.sub(r"\1 \2 \3", text)          # "December | 17, | 2025" is a date the model put table bars in
     text = close_spaced_numbers(text, facts)
+    text, _ = strip_page_footers(text)
     text, looped = trim_repeats(text)
     text, looped_short = collapse_runs(text)
-    looped = looped or looped_short
+    source = " ".join(f"{f.get('label', '')} {f.get('value', '')} {f.get('snippet', '')}" for f in facts)
+    text, degenerate = cut_degenerate(text, source)
+    looped = looped or looped_short or degenerate
     context = f"{company} {s}"
-    blocks = [blk for blk in parse_markdown(text) if blk["type"] != "heading"]
+    blocks = clean_fragments([blk for blk in parse_markdown(text) if blk["type"] != "heading"])
     n = 0
     for blk in blocks:                            # the model may not state what the inputs do not support
         if blk["type"] == "paragraph":
+            blk["text"], based = mask_misbased_percents(blk["text"], facts, context)
+            blk["text"], timed = mask_period_claims(blk["text"], facts)
+            blk["text"], future = mask_future_dates(blk["text"], facts)
+            blk["text"], event = mask_event_dates(blk["text"], facts)
+            blk["text"], malformed = mask_malformed_amounts(blk["text"], facts)
+            blk["text"], units = mask_unit_claims(blk["text"], facts)
+            timed = timed + future + event + malformed + units
             blk["text"], blk["masked"] = mask_ungrounded(blk["text"], facts, offer, context)
+            blk["masked"] = based + timed + blk["masked"]
             blk["text"], ents = mask_unknown_entities(blk["text"], corpus, context)
             blk["text"], places = mask_unknown_places(blk["text"], corpus, context)
             blk["masked"] += ents + places
@@ -569,6 +839,7 @@ def compose(key, ctx: Ctx, llm=None, best_of=DRAFT_BEST_OF):
     if sec["writer"].startswith("slm"):
         narrative += [s for s in (sec["subheads"] or [sec["title"]]) if s not in built and s not in narrative]
     engine, usage, prose, looped, trimmed = "code", {}, {}, [], []
+    absent = set()                                  # sub-headings the issuer's files say nothing about
     if narrative and llm is not None:
         # one call per sub-heading, in the format the student is trained on (data/prompts.py)
         outline = _order(sec, b, narrative)
@@ -582,6 +853,7 @@ def compose(key, ctx: Ctx, llm=None, best_of=DRAFT_BEST_OF):
             passages, supported = passage_facts(ctx, s, sec)
             if not supported:                       # the files say nothing about this sub-heading: do not let the model invent it
                 prev = ""
+                absent.add(s)
                 continue
             extras = unknown_facts(s, sec["title"], passages + routed) + derive_facts(routed, s, sec["title"])
             msgs, cut = fit_messages(lambda ps, rs: drafting_messages(ctx.company(), sec["title"], outline, s, extras + ps + rs,
@@ -620,10 +892,23 @@ def compose(key, ctx: Ctx, llm=None, best_of=DRAFT_BEST_OF):
         if s in narrative:
             if s in prose:
                 blocks += prose[s]
+            elif s in absent:                   # only facts that name the sub-heading's own terms are listed: unrelated ones
+                from rag.index import tokens    # (rent lines under "Changes in Registered Office") mislead
+                bf = brief(facts, s, sec, doc_types)
+                terms = {_stem(t) for t in tokens(s) if len(t) >= 4 and t.isalpha() and t not in GENERIC_TERMS}
+                keep = [it for it in bf["items"] if terms & {_stem(t) for t in tokens(f"{it['label']} {it['period']}")}]
+                if keep:
+                    bf["items"], bf["facts"] = keep, [it["fact_id"] for it in keep]
+                    blocks.append(bf)
+                else:
+                    blocks.append({"type": "brief", "missing": True, "sub": s, "facts": [], "items": [],
+                                   "text": f"{PH} The issuer's files do not state this. To be provided by the issuer."})
+                pending.append(s)
             else:
                 blocks.append(brief(facts, s, sec, doc_types))
                 pending.append(s)
         blocks += next((bl for x, bl in b.parts if x == s), [])
+    blocks = dedupe_paragraphs(blocks)
     attach_citations(blocks, facts)
     if not blocks:
         blocks = [{"type": "note", "text": f"{PH} No input was found for this section.", "facts": []}]
@@ -685,6 +970,9 @@ def make_ctx(project, facts, files, load_blocks):
     assistant (prompt injection in an issuer's file) is left out, so neither drafting nor the assistant uses it."""
     from rag.guardrails import RE_INJECTION
     facts = [f for f in facts if not RE_INJECTION.search(f"{f.get('label', '')}: {f.get('value', '')}")]
+    from verify.checks import platform_issue
+    if platform_issue(project, facts):          # the files name the other listing platform: not stated until the Offer details settle it
+        project = {**project, "offer": {**(project.get("offer") or {}), "board": ""}}
     blocks, tables = {}, []
     for f in files:
         if f.get("status") != "processed":

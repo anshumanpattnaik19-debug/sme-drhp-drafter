@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import re
 
-MAX_FACTS_PER_FILE = 400
+# A file past this is cut and the app says so (extract_facts_ex). 400 silently dropped the prose of eight files of the
+# Vidyunmaya data room (22 Nov 2026): rows are read first, so what a cap removes is the running text.
+MAX_FACTS_PER_FILE = 3000
 
 NUM = r"\(?-?\d{1,3}(?:,\d{2,3})*(?:\.\d+)?\)?|\(?-?\d+(?:\.\d+)?\)?"
 RE_NUM_ONLY = re.compile(rf"^\s*(?:₹|rs\.?|inr)?\s*({NUM})\s*(%|lakhs?|crores?|cr|mn|million)?\s*$", re.I)
@@ -128,6 +130,8 @@ def _from_rows(blocks):
             if i <= lab_idx or not c or c == cells[lab_idx] or emitted >= 8:
                 continue
             col = header[i] if header and i < len(header) else ""
+            if col and RE_CHECK_COL.match(col):
+                continue                       # a control column ("Check (amount - deployment)") is the workbook's, not the issuer's
             is_period = bool(col and RE_PERIOD.search(col) and len(col) < 40)
             typ, val, u = infer_type(c)
             if typ == "count" and unit:
@@ -232,10 +236,27 @@ def _ncols(b):
     return max(len(r.split(" | ")) for r in b["text"].split("\n"))
 
 
-def extract_facts(blocks: list[dict]) -> list[dict]:
+RE_CHECK_COL = re.compile(r'\s*(?:check|difference|diff\.?)\b', re.I)
+HELPER_SHEETS = {"checks", "readme", "legend", "instructions"}   # "index" too, in a workbook that is not the document index (the reader)
+RE_HELPER_ROW = re.compile(r"^(?:check\s*[:(-]|checks?\b.*must be zero|total of all checks|sum of all check rows|integrity checks?|zero-check)", re.I)
+
+
+def is_helper_block(b: dict) -> bool:
+    """A spreadsheet's own control rows ("Check: total assets - total equity and liabilities | 0 | 0") and its Checks / Index
+    sheets describe the workbook, not the issuer. They are not facts: drafted prose quoted them (22 Nov 2026, hosted test)."""
+    if b.get("kind") != "row":
+        return False
+    if (b.get("sheet") or "").strip().lower() in HELPER_SHEETS:
+        return True
+    return bool(RE_HELPER_ROW.match(b["text"].lstrip(" |")))
+
+
+def extract_facts_ex(blocks: list[dict]) -> tuple[list[dict], int]:
+    """(facts, dropped): the facts of one file, and how many were left out because the file passed MAX_FACTS_PER_FILE."""
+    blocks = [b for b in blocks if not is_helper_block(b)]
     two_col = [b for b in blocks if b["kind"] != "table" or _ncols(b) < 3]
     facts = _from_rows([b for b in blocks if b["kind"] == "row"] + _table_rows(blocks)) + _from_kv(two_col) + _from_text(blocks)
-    seen, out = set(), []
+    seen, out, dropped = set(), [], 0
     for f in facts:
         f["snippet"] = re.sub(r"\s+", " ", f["snippet"]).strip()
         if f["type"] == "short_text" and len(f["value"]) < 2:
@@ -244,7 +265,12 @@ def extract_facts(blocks: list[dict]) -> list[dict]:
         if key in seen:
             continue
         seen.add(key)
-        out.append(f)
         if len(out) >= MAX_FACTS_PER_FILE:
-            break
-    return out
+            dropped += 1
+            continue
+        out.append(f)
+    return out, dropped
+
+
+def extract_facts(blocks: list[dict]) -> list[dict]:
+    return extract_facts_ex(blocks)[0]

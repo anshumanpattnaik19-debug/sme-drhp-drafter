@@ -64,29 +64,39 @@ def rule_ip(ctx: Ctx):
     bad = [r for r in t.rows if re.search(r"objected|opposed|refused|abandoned|pending|not (yet )?registered", _cell(t, r, "status"), re.I)]
     if not bad:
         return []
-    items = "; ".join(f"{r[0]} (application no. {_cell(t, r, 'application')}): {_cell(t, r, 'status')}" for r in bad[:4])
-    return [_flag("ip", "internal", "We may not be able to protect our intellectual property; some of our trade mark applications are not registered.",
+    def num(r):                      # the register may head the column "Application no." or "Registration no."
+        v = _cell(t, r, "application") or _cell(t, r, "registration") or _cell(t, r, "no.")
+        return f" (no. {v})" if v else ""
+    items = "; ".join(f"{r[0]}{num(r)}: {_cell(t, r, 'status')}" for r in bad[:4])
+    return [_flag("ip", "internal", "We may not be able to protect our intellectual property; some of our trade marks are not registered in our name or are still applications.",
                   f"{items}. If registration is refused, we may not be able to prevent others from using similar marks and may have to rebrand. {CONSEQ}",
                   [_src_row(t, r) for r in bad[:4]], "Our Business — Intellectual Property")]
 
 
 def rule_customers(ctx: Ctx):
-    hits = ctx.sentences(r"top[- ]?(10|ten|5|five)\s+customers.{0,80}\d+(\.\d+)?\s?%|\d+(\.\d+)?\s?% of (our )?revenue.{0,60}top", ["business_note", "offer_note", "operational_data"], 2)
+    hits = ctx.sentences(r"top[- ]?(10|ten|5|five)\s+customers.{0,80}\d+(\.\d+)?\s?%|\d+(\.\d+)?\s?% of (our )?revenue.{0,60}top", ["business_note", "offer_note", "operational_data"], 2, prose_only=True)
     t = find(ctx.tables, ["operational_data", "business_note"], header=["customer"], title=r"customer")
     srcs = [s for _, s in hits]
-    share = ""
+    share, period = "", ""
     if hits:
         m = re.search(r"(\d+(?:\.\d+)?)\s?%", hits[0][0])
         share = m.group(1) + "%" if m else ""
+        per = re.search(r"%.{0,60}?\b(?:in|for|during)\s+((?:H[12]\s+)?FY\s?[\d-]+(?:\s?[\d-]+)?)", hits[0][0])
+        period = f" in {per.group(1).strip()}" if per else ""
     top1 = ""
     if t and t.rows:
-        last = len(t.header) - 1
-        v = t.rows[0][last]
-        top1 = f" Our largest customer accounted for {fmt.pct(v)} of revenue from operations in {t.header[last]}."
-        srcs.append(_src_row(t, t.rows[0]))
-    if not (hits or t):
+        # only a column that is a share (its header says % or share) is a percentage: the last column of a customer table is
+        # often an amount in lakhs (22 Nov 2026: "accounted for 952.06% of revenue")
+        share_cols = [i for i, h in enumerate(t.header) if re.search(r"%|share|per ?cent", h, re.I)]
+        if share_cols:
+            last = share_cols[-1]
+            v = t.rows[0][last]
+            if fmt.parse(v) is not None and 0 < fmt.parse(v) <= 100:
+                top1 = f" Our largest customer accounted for {fmt.pct(v)} of revenue from operations in {t.header[last]}."
+                srcs.append(_src_row(t, t.rows[0]))
+    if not srcs:
         return []
-    lead = f"Our top-10 customers contributed {share} of our revenue from operations" if share else "A significant part of our revenue comes from a limited number of customers"
+    lead = f"Our top-10 customers contributed {share} of our revenue from operations{period}" if share else "A significant part of our revenue comes from a limited number of customers"
     return [_flag("customers", "internal", "We depend on a limited number of customers for a significant portion of our revenue.",
                   f"{lead} (see {srcs[0]['file_name']}).{top1} We do not have long-term contracts with most of our customers. The loss of, or a significant "
                   f"reduction in orders from, any of these customers may adversely affect our revenue and profitability.",
@@ -96,7 +106,7 @@ def rule_customers(ctx: Ctx):
 def rule_rpt(ctx: Ctx):
     t = find(ctx.tables, ["group_rpt", "people_profiles"], header=["related party"])
     lease = ctx.sentences(r"(leave and licen[cs]e|lease).{0,120}(related party|promoter|director)|(related party|promoter).{0,80}(leave and licen[cs]e|lease)",
-                          ["lease", "business_note", "group_rpt"], 1)
+                          ["lease", "business_note", "group_rpt"], 1, prose_only=True)
     if not (t or lease):
         return []
     body, srcs = [], []
@@ -120,7 +130,7 @@ def rule_rpt(ctx: Ctx):
 
 def rule_lender(ctx: Ctx):
     hits = ctx.sentences(r"(no[- ]objection|NOC|consent).{0,80}(bank|lender)|(bank|lender).{0,80}(no[- ]objection|NOC|consent)|negative covenant|restrictive covenant",
-                         ["offer_note", "sanction_letter", "borrowings", "business_note"], 3)
+                         ["offer_note", "sanction_letter", "borrowings", "business_note"], 3, prose_only=True)
     pend = [h for h in hits if re.search(r"pending|not yet|yet to|awaited|to be obtained|applied", h[0], re.I)] or hits
     if not pend:
         return []
@@ -133,13 +143,20 @@ def rule_litigation(ctx: Ctx):
     t = find(ctx.tables, ["litigation"], header=["category", "company"])
     if not t:
         return []
+    lakhs = bool(ctx.sentences(r"amounts? in .{0,3}\s?lakhs", ["litigation"], 1, prose_only=True))   # the certificate's own note on its unit
     hits, rows = [], []
     for r in t.rows:
         for i, h in enumerate(t.header[1:], start=1):
             v = r[i] if i < len(r) else ""
             if v and not re.match(r"^(nil|-|–|0|none|na|n\.a\.|not applicable)$", v.strip(), re.I) and not re.match(r"total", r[0], re.I):
                 cat = re.sub(r"\s*-\s*(by|against)\b.*$|\s*\(.*?\)", "", r[0]).strip().lower()
-                hits.append(f"{cat} involving our {h.split('(')[0].strip().lower()}: {v}")
+                by = bool(re.search(r"-\s*by\b", r[0], re.I))
+                m = re.match(r"^(\d+)\s*\(([\d,.]+|not quantified)\)$", v.strip(), re.I)
+                if m:       # "1 (31.20)": a number of cases and the amount involved
+                    n, amt = int(m.group(1)), m.group(2)
+                    v = f"{n} case{'s' if n != 1 else ''}" + (f" (amount not quantified)" if amt.lower().startswith("not") else
+                                                                 f" (amount involved: ₹ {amt} lakhs)" if lakhs else f" (amount involved: {amt})")
+                hits.append(f"{cat} {'initiated by' if by else 'involving'} our {h.split('(')[0].strip().lower()}: {v}")
                 if r not in rows:
                     rows.append(r)
     if not hits:
@@ -166,8 +183,14 @@ def rule_contingent(ctx: Ctx):
                   [_src_row(t, r) for r in items[:4] + ([tot] if tot else [])], "Restated Financial Information")]
 
 
-def rule_text(ctx: Ctx, key, rx, doc_types, title, tail, xref, group="internal", limit=2):
-    hits = ctx.sentences(rx, doc_types, limit)
+def rule_text(ctx: Ctx, key, rx, doc_types, title, tail, xref, group="internal", limit=2, prose_only=False, row_note=""):
+    """One risk factor from sentences matching rx. prose_only reads sentences only; a match found only in a table or a
+    spreadsheet row (a quotation line is not a sentence) is then stated as row_note, with the row as its source."""
+    hits = ctx.sentences(rx, doc_types, limit, prose_only=prose_only)
+    if not hits and prose_only and row_note:
+        rows = ctx.sentences(rx, doc_types, 1)
+        if rows:
+            return [_flag(key, group, title, f"{row_note} {tail}", [rows[0][1]], xref)]
     if not hits:
         return []
     return [_flag(key, group, title, " ".join(h[0] for h in hits) + " " + tail, [h[1] for h in hits], xref)]
@@ -235,11 +258,12 @@ def risk_factors(ctx: Ctx):
                        "Objects of the Offer", limit=1)
     flags += rule_text(ctx, "forex", r"\b(EUR|USD|foreign currency|imported)\b.{0,80}(₹|INR|quotation|machine)|exchange rate", ["offer_note", "objects_cost", "quotation"],
                        "Part of the plant and machinery is imported and priced in foreign currency; exchange rate movements may increase the cost of the objects.",
-                       "Any increase will have to be met from internal accruals or borrowings.", "Objects of the Offer", limit=1)
-    flags += rule_text(ctx, "group_conflict", r"(group compan|promoter group entit|LLP).{0,120}(supplier|similar|same line|conflict)",
+                       "Any increase will have to be met from internal accruals or borrowings.", "Objects of the Offer", limit=1,
+                       prose_only=True, row_note="Part of the equipment proposed to be bought from the Net Proceeds is quoted in foreign currency.")
+    flags += rule_text(ctx, "group_conflict", r"(group compan|promoter group|partnership|firm|LLP).{0,160}(supplier|similar|same line|conflict|loose spices|competes?)",
                        ["group_rpt", "people_profiles", "business_note"],
-                       "One of our Group Companies is engaged in a related line of business and supplies to us, which may lead to conflicts of interest.",
-                       "There is no non-compete arrangement with the Group Company.", "Our Group Companies", limit=1)
+                       "An entity connected with our Promoters is engaged in a related line of business, which may lead to conflicts of interest.",
+                       "Any conflict of interest could affect our business and the interests of our shareholders.", "Our Group Companies", limit=1, prose_only=True)
     flags += rule_cash_flow(ctx)
     flags += rule_text(ctx, "raw_material", r"(raw material|polymer|film).{0,60}(price|cost).{0,60}(volatil|fluctuat|crude)", ["business_note", "industry_report"],
                        "Our business depends on the availability and price of raw materials, which are volatile.",

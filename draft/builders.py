@@ -20,6 +20,16 @@ PH = "[●]"
 TBC = "(to be confirmed by the BRLM)"
 
 
+NBSP = " "
+RE_ABBREV = re.compile(r"(?<![A-Za-z])(?:" + "|".join(["No", "Nos", "Ref", "Dr", "Mr", "Mrs", "Ms", "Shri", "Smt", "Rs", "St", "Co", "Pvt", "Ltd", "vs", "Sr", "Dt", "Dtd", "Regd", "Sec", "Art", "approx"]) + r")\.\s", re.I)
+
+
+def protect_abbrev(text):
+    """Text with the space after an abbreviation ("No. SRP/VIL/..", "Dr. Gokhale") made a no-break space, so that a sentence
+    split does not cut there (the cut put "SRP/VIL/2026-27/C-05 dated ..." at the head of a sentence, 22 Nov 2026)."""
+    return RE_ABBREV.sub(lambda m: m.group(0)[:-1] + NBSP, text)
+
+
 @dataclass
 class Ctx:
     project: dict
@@ -36,17 +46,24 @@ class Ctx:
         Tables are flattened to rows. Empty when the issuer gave no business note."""
         if self._notes is None:
             import re as _re
-            head = _re.compile(r"^\d{1,2}\.\s+([A-Z][^.]{2,90})$")
+            head = _re.compile(r"^\d{1,2}\.\s+([A-Z][^.\t]{2,90})$")
             out = []
             for f in self.files:
                 if f.get("doc_type") != "business_note":
                     continue
+                blocks = [b for b in self.blocks.get(f["id"], []) if not b.get("toc")]
+                top = min((b["heading"] for b in blocks if b.get("heading")), default=None)
                 cur = None
-                for b in self.blocks.get(f["id"], []):
+                for b in blocks:
                     t = (b.get("text") or "").strip()
-                    m = head.match(t) if b.get("kind") == "text" and len(t.split()) <= 14 else None
+                    if top is not None:        # Word heading styles: the author's own outline (numbering is not in the text)
+                        m = b.get("kind") == "text" and b.get("heading") == top and len(t.split()) <= 14
+                        name = t
+                    else:                      # no styles (a PDF or a converted file): numbered lines, "3. Business segments"
+                        mm = head.match(t) if b.get("kind") == "text" and len(t.split()) <= 14 else None
+                        m, name = bool(mm), (mm.group(1).strip() if mm else "")
                     if m:
-                        cur = [m.group(1).strip(), []]
+                        cur = [name, []]
                         out.append(cur)
                     elif cur is not None and t:
                         cur[1].append(t.replace("\n", " ; ") if b.get("kind") == "table" else t)
@@ -83,11 +100,17 @@ class Ctx:
     def company(self):
         return self.o("company_name", self.project.get("name") or PH)
 
+    def board_label(self):
+        """"BSE SME" or "NSE Emerge" as set in the Offer details; [●] when the files name the other platform and nobody has
+        decided (make_ctx), so a draft does not state the wrong exchange."""
+        return {"bse_sme": "BSE SME", "nse_emerge": "NSE Emerge"}.get(self.offer.get("board"), PH)
+
     def doc_type(self, fid):
         return next((f.get("doc_type") for f in self.files if f["id"] == fid), None)
 
-    def sentences(self, rx, doc_types=None, limit=3):
-        """Sentences matching rx in the text of files of the given types: [(sentence, source)]."""
+    def sentences(self, rx, doc_types=None, limit=3, prose_only=False):
+        """Sentences matching rx in the text of files of the given types: [(sentence, source)]. prose_only leaves out
+        table and spreadsheet rows (a loan row read as a sentence is not a covenant)."""
         out, seen = [], set()
         rx = re.compile(rx, re.I) if isinstance(rx, str) else rx
         for f in self.files:
@@ -96,8 +119,8 @@ class Ctx:
             for b in self.blocks.get(f["id"], []):
                 if b["kind"] in ("text", "ocr"):
                     # PDF text breaks lines mid-sentence: join lines, then split into sentences
-                    units = re.split(r"(?<=[.;])\s+(?=[A-Z(])", " ".join(b["text"].split()))
-                elif b["kind"] in ("table", "row"):
+                    units = [u.replace(NBSP, ' ') for u in re.split(r'(?<=[.;]) +(?=[A-Z(])', protect_abbrev(' '.join(b['text'].split())))]
+                elif b["kind"] in ("table", "row") and not prose_only:
                     units = [", ".join(c.strip() for c in r.split(" | ") if c.strip() and c.strip() not in ("-", "–"))
                              for r in b["text"].split("\n")]
                 else:
@@ -147,6 +170,17 @@ def missing_note(b: Build, what, where):
     return note(f"{PH} {what}: not found in the inputs. Expected in: {where}.")
 
 
+# The workings sheet prints each ratio three times (as recomputed, as in the restated information "RFI ...", and the difference
+# "Diff. ..."); only the first set of periods and the definition belong in the draft (22 Nov 2026).
+RATIO_DROP = r"^(formula|check|#|sr\.?|s\. ?no\.?|rfi\b|diff\.?)"
+
+
+def last_period_col(t: Table) -> int:
+    """Index of the last column of a schedule that is a period (FY..., H1..., a date), not a definition or a difference."""
+    idx = [i for i, h in enumerate(t.header) if re.match(r"\s*(FY|H[12]\b|9M|\d{4}|as at|31|30)", h or "", re.I)]
+    return idx[-1] if idx else len(t.header) - 1
+
+
 def table_block(t: Table, cols=None, drop=r"^(check|formula|#|sr\.?|s\. ?no\.?)\b", rows=None, caption=None,
                 max_rows=60, rename=None, unit=None, total_label=None):
     """Render an issuer table: chosen columns (by header words), Indian number formats, source attached."""
@@ -167,7 +201,10 @@ def table_block(t: Table, cols=None, drop=r"^(check|formula|#|sr\.?|s\. ?no\.?)\
     head = [(rename or {}).get(t.header[i], t.header[i]) for i in idx]
     body = []
     for r in (rows if rows is not None else t.rows)[:max_rows]:
-        cells = [fmt.cell(r[i] if i < len(r) else "", k if k != "auto" else "auto", unit) for i, k in zip(idx, kinds)]
+        # a count row in a column of percentages ("Number of customers billed | 291 | 322") is not a percentage
+        count_row = bool(re.match(r"\s*(?:number|no\.|nos\.?|count|total number)\b", str(r[0]), re.I)) if r else False
+        cells = [fmt.cell(r[i] if i < len(r) else "", ("auto" if (k == "pct" and count_row) else k), "" if count_row else unit)
+                 for i, k in zip(idx, kinds)]
         if any(c for c in cells):
             body.append(cells)
     if not body:
@@ -294,7 +331,7 @@ def b_the_offer(ctx: Ctx, b: Build, structure=False):
     blk = {"type": "table", "text": "", "rows": rows, "caption": "Offer structure", "sources": [src] if src else [], "facts": []}
     if structure:
         b.add(None, para(f"The Offer is being made through the Book Building Process in terms of Chapter IX of the SEBI ICDR Regulations, "
-                         f"on {'BSE SME' if o.get('board') != 'nse_emerge' else 'NSE Emerge'}. The allocation between investor categories "
+                         f"on {ctx.board_label()}. The allocation between investor categories "
                          f"will be as per the SEBI ICDR Regulations {TBC}."))
     else:
         b.add(None, para(f"The following table summarises the Offer. The Offer has been authorised by our Board on "
@@ -468,7 +505,7 @@ def b_summary_financials(ctx: Ctx, b: Build):
 def b_other_financial(ctx: Ctx, b: Build, basis=False):
     pl, bs, cf, ratios = _fin_tables(ctx)
     if ratios:
-        b.add("Accounting Ratios", table_block(ratios, drop=r"^(formula)\b", caption="Accounting ratios derived from the Restated Financial Information"))
+        b.add("Accounting Ratios", table_block(ratios, drop=RATIO_DROP, caption="Accounting ratios derived from the Restated Financial Information"))
     else:
         b.add("Accounting Ratios", missing_note(b, "Accounting ratios", "restated financials workings"))
     if basis:
@@ -493,7 +530,7 @@ def b_capitalisation(ctx: Ctx, b: Build):
     if ratios:
         de = next((r for r in ratios.rows if re.search(r"debt.?equity", r[0], re.I)), None)
         if de:
-            rows.append(["Total borrowings / total equity (times)", fmt.cell(de[len(ratios.header) - 2 if ratios.col("formula") else -1]), PH])
+            rows.append(["Total borrowings / total equity (times)", fmt.cell(de[last_period_col(ratios)]), PH])
     b.add(None, para("The capitalisation statement based on the Restated Financial Information is set out below. Post-Offer figures depend on the Offer Price and are [●]."),
           {"type": "table", "text": "", "rows": rows, "caption": "Capitalisation statement", "sources": [bs.source()], "facts": []})
 

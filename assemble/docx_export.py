@@ -198,7 +198,8 @@ def build_docx(project, drafts, facts, review, path, include_review=True, includ
                         doc.add_paragraph()
                 elif b["type"] == "brief":
                     p = doc.add_paragraph()
-                    r = p.add_run(f"[Drafting brief — prose to be written: {b.get('sub', '')}]")
+                    r = p.add_run(f"[●] {b.get('sub', '')}: not stated in the issuer's files; to be provided by the issuer."
+                                  if b.get("missing") else f"[Drafting brief — prose to be written: {b.get('sub', '')}]")
                     r.italic, r.bold, r.font.size, r.font.color.rgb = True, True, Pt(9), GREY
                     for it in b.get("items", [])[:8]:
                         bp = doc.add_paragraph(style="List Bullet")

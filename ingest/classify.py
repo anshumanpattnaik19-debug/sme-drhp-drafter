@@ -28,7 +28,9 @@ DOC_TYPES = {
     "sanction_letter": ("Bank sanction letter", "Financial", ["sanction_letter", "sanction"], ["sanction letter", "we are pleased to sanction"]),
     "business_note": ("Business information note", "Business", ["business_note", "company_profile"], ["our products", "manufacturing facility"]),
     "operational_data": ("Operational data", "Business", ["operational_data", "capacity_utilisation"], ["capacity utilisation"]),
-    "process_flow": ("Process flow chart", "Business", ["process_flow"], []),
+    "process_flow": ("Process flow chart", "Business", ["process_flow", "flow_chart", "execution_flow"], []),
+    "order_book": ("Order book certificate", "Business", ["order_book"], ["order book certificate", "certified order book"]),
+    "work_completion": ("Work completion certificates", "Business", ["work_completion", "completion_certificate"], ["work completion certificate"]),
     "industry_report": ("Industry report", "Business", ["industry_report", "industry"], ["industry report", "market size"]),
     "insurance_ip": ("Insurance and IP register", "Business", ["insurance", "_ip_", "trademark"], ["insurance policy", "trade mark"]),
     "plant_photos": ("Plant photographs / layout", "Business", ["plant_photograph", "photographs"], []),
@@ -37,13 +39,18 @@ DOC_TYPES = {
     "litigation": ("Litigation certificate", "Legal & Approvals", ["litigation"], ["outstanding litigation", "materiality"]),
     "approvals": ("Licences and approvals register", "Legal & Approvals", ["licences_and_approvals", "approvals"], ["validity", "licence"]),
     "lease": ("Lease / leave and licence", "Legal & Approvals", ["leave_and_licence", "lease", "rent"], ["leave and licence", "licensor"]),
-    "licence": ("Licence / certificate", "Legal & Approvals", ["licence", "license", "noc", "consent_cca", "gst_registration", "gpcb"], ["registration certificate", "no objection"]),
+    "licence": ("Licence / certificate", "Legal & Approvals", ["licence", "license", "noc", "consent_cca", "gst_registration", "gpcb", "bocw", "registration", "pollution_consent", "fssai"], ["registration certificate", "no objection"]),
     "group_rpt": ("Group companies and RPT", "Legal & Approvals", ["group_compan", "rpt", "related_part"], ["related party"]),
     "offer_note": ("Note on proposed issue", "Offer", ["note_on_proposed_issue", "proposed_issue", "offer_note"], ["proposed issue", "fresh issue"]),
     "objects_cost": ("Objects and project cost", "Offer", ["objects", "project_cost"], ["objects of the issue", "project cost"]),
     "quotation": ("Quotation", "Offer", ["quotation", "quote"], ["quotation", "validity of offer"]),
     "selling_shareholder_consent": ("Selling shareholder consent", "Offer", ["selling_shareholder"], ["offer for sale"]),
     "capacity_certificate": ("Chartered engineer certificate", "Offer", ["chartered_engineer", "capacity_certificate"], ["chartered engineer"]),
+    "shareholder_agreement": ("Shareholders' agreement and waiver", "Corporate", ["shareholders_agreement", "shareholder_agreement", "waiver"], ["shareholders' agreement", "shareholders agreement"]),
+    "revenue_certificate": ("Channel and category revenue certificate", "Financial", ["channel_and_category", "revenue_certificate", "category_revenue"], ["channel and category", "revenue by channel"]),
+    "material_agreement": ("Distribution and other material agreements", "Business", ["distribution_and", "agreements_specimen", "material_agreement", "cf_agreement"], ["distributor agreement", "carrying and forwarding", "distribution agreement"]),
+    "trademark_deed": ("Trade mark assignment deed", "Legal & Approvals", ["assignment_of_trade", "deed_of_assignment", "trade_mark_registration", "trademark_registration"], ["deed of assignment", "assignment of trade mark"]),
+    "media_plan": ("Media plan / advertising agency", "Offer", ["media_plan", "advertising_agency"], ["media plan", "advertising agency"]),
     "document_index": ("Document index", "Other", ["document_index", "index"], []),
     "other": ("Other", "Other", [], []),
 }
@@ -61,7 +68,7 @@ def classify(filename: str, text: str = "") -> dict:
         if key == "other":
             continue
         hits_f = [k for k in fkw if _norm(k) in name]
-        hits_t = [k for k in tkw if k in head]
+        hits_t = [k for k in tkw if re.search(r'\b' + re.escape(k) + (r'\b' if len(k) <= 4 else ''), head)]   # "din" is not "building"
         score = 2.0 * len(hits_f) + 1.0 * len(hits_t)
         if score > best_score:
             best, best_score, matched = key, score, hits_f + hits_t

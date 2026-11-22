@@ -32,7 +32,7 @@ from draft.outline import PARTS, SECTION_BY_KEY, SECTIONS, WRITERS  # noqa: E402
 from draft.builders import offer_terms  # noqa: E402
 from draft.writer import make_ctx, write_section  # noqa: E402
 from extract.canonical import mark_superseded  # noqa: E402
-from extract.rules import extract_facts  # noqa: E402
+from extract.rules import MAX_FACTS_PER_FILE, extract_facts_ex  # noqa: E402
 from ingest.classify import CATEGORIES, DOC_TYPES, classify, doc_type_options  # noqa: E402
 from ingest.readers import FORMATS, file_format, ocr_available, read_file  # noqa: E402
 from serve import chat as assistant  # noqa: E402
@@ -74,7 +74,7 @@ def _guard_build():
     import hashlib
     root = Path(__file__).resolve().parents[1]
     h = hashlib.sha256()
-    for rel in ("draft/writer.py", "verify/checks.py", "data/facts.py"):
+    for rel in ("draft/writer.py", "verify/checks.py", "verify/claims.py", "data/facts.py"):
         try:
             h.update((root / rel).read_bytes().replace(b"\r\n", b"\n"))
         except OSError:
@@ -455,7 +455,10 @@ def process(pid: str, body: ProcessIn):
                 doc_type = cur_f["doc_type"] if cls is None else cls["doc_type"]
                 doc_label = DOC_TYPES[doc_type][0]
                 # the document index lists files, not issuer facts; keep it out of the fact store
-                facts = [] if doc_type == "document_index" else extract_facts(res["blocks"])
+                facts, dropped = ([], 0) if doc_type == "document_index" else extract_facts_ex(res["blocks"])
+                if dropped:
+                    res["warnings"] = list(res["warnings"]) + [
+                        f"{dropped} facts beyond the first {MAX_FACTS_PER_FILE} were not kept; split the file or add them by hand"]
                 for n, x in enumerate(facts):
                     x.update({"id": f"{f['id']}-{n}", "file_id": f["id"], "file_name": f["name"], "doc_type": doc_type,
                               "doc_label": doc_label, "origin": "rules", "reviewed": False})

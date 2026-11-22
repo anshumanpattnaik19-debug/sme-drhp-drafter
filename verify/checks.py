@@ -13,6 +13,7 @@ Page references ("beginning on page 200") are not figures: they are listed apart
 """
 from __future__ import annotations
 
+import json
 import re
 from collections import defaultdict
 
@@ -28,12 +29,12 @@ RE_YEAR = re.compile(r"^(19|20)\d{2}$")
 RE_ANYNUM = re.compile(r"\d[\d,]*(?:\.\d+)?")
 RE_PAGE_REF = re.compile(r"\bpages?\s+(?:no\.?\s*)?(?:\|\s*)?\d+(?:\s*\|)?(?:\s*(?:,|and|&|to|-|–)\s*\d+)*", re.I)
 # 1-2 digit numbers that state a fact: "aged 45", "15 years of experience", "12%", "₹ 5 lakhs"
-COUNT_NOUNS = (r"personnel|employees|staff|workers|labou?rers|engineers|professionals|units|machines|branches|outlets|"
+COUNT_NOUNS = (r"people|persons|individuals|personnel|employees|staff|workers|labou?rers|engineers|professionals|units|machines|branches|outlets|"
                r"stores|showrooms|warehouses|customers|clients|distributors|dealers|vendors|suppliers|directors|members|"
                r"shareholders|plants|factories|offices|locations|countries|states|cities|districts|projects|products|"
                r"vehicles|trucks|beds|rooms|acres|hectares|days|hours|kms?|kilomet(?:re|er)s?|met(?:re|er)s|miles|sq\.? ?ft|sq\.? ?m")
 RE_SMALL = re.compile(r"(?:\baged?\s+(?:about\s+|of\s+)?|\bage\s+of\s+)(\d{1,2})\b"
-                      r"|(?<![\w.,/])(\d{1,2}(?:\.\d+)?)(?=\s?%|\s*(?:years?|yrs\.?|months?)\b)"
+                      r"|(?<![\w.,/])(\d{1,2}(?:\.\d+)?)(?=\s?%|\s*per\s?cent\b|\s*(?:years?|yrs\.?|months?)\b)"
                       r"|(?:₹|Rs\.?|INR)\s?(\d{1,2}(?:\.\d+)?)(?![\d,.])"
                       rf"|(?<![\w.,/])(\d{{1,2}})(?=\s+(?:(?:new|more|additional|skilled|full[- ]time)\s+)?(?:{COUNT_NOUNS})\b"
                       rf"|\s+(?:\([^)]{{0,60}}\)\s+)?of\s+(?:our|the|its)\s+(?:{COUNT_NOUNS})\b)", re.I)
@@ -113,10 +114,15 @@ class Known:
                 if k is not None:
                     self.percents.add(k)
         for t in texts:
-            self.percents |= {num_key(x) for x in re.findall(r"(\d+(?:\.\d+)?)\s?%", str(t))} - {None}
+            self.percents |= {num_key(x) for x in re.findall(r"(\d+(?:\.\d+)?)\s?(?:%|per\s?cent\b)", str(t), re.I)} - {None}
         self.dates = set().union(*(parse_dates(t) for t in texts)) if texts else set()
         self.words = {w.lower() for t in texts for w in RE_WORD.findall(t)}
         self.text = "\n".join(texts).lower()
+
+
+def _is_pct(text, end):
+    """Is the number that ends at text[end] a percentage: "61%", "61 %", "61 per cent", "61 percent"?"""
+    return bool(re.match(r"\s*(?:%|per\s?cent\b)", text[end:end + 10], re.I))
 
 
 def scan(text, known):
@@ -175,13 +181,13 @@ def scan(text, known):
         raw, k = m.group(1), num_key(m.group(1))
         if k is None or RE_YEAR.match(raw) or not free(*m.span(1)):
             continue
-        pool = known.percents if text[m.end(1):m.end(1) + 2].strip().startswith("%") else known.numbers
+        pool = known.percents if _is_pct(text, m.end(1)) else known.numbers
         found.append({"kind": "figure", "start": m.start(1), "end": m.end(1), "raw": raw, "grounded": k in pool})
         taken.append(m.span(1))
     for m in RE_SMALL.finditer(text):
         g = next(i for i in (1, 2, 3, 4) if m.group(i))
         if free(*m.span(g)):
-            pool = known.percents if text[m.end(g):m.end(g) + 2].strip().startswith("%") else known.numbers
+            pool = known.percents if _is_pct(text, m.end(g)) else known.numbers
             found.append({"kind": "small", "start": m.start(g), "end": m.end(g), "raw": m.group(g),
                           "grounded": num_key(m.group(g)) in pool})
             taken.append(m.span(g))
@@ -212,7 +218,8 @@ def scan(text, known):
 def mask_ungrounded(text, facts, offer=None, context=""):
     """The text with every ungrounded figure, number, date and honorific name, and every page reference, replaced by
     [●]; returns (text, masked), masked being [{"kind", "raw", "context"}] for the reviewer."""
-    known = Known(facts, offer, context)
+    from verify.memo import memo
+    known = memo(facts, ("known", json.dumps(offer, sort_keys=True, default=str), context), lambda: Known(facts, offer, context))
     hits = [f for f in scan(text, known) if not f["grounded"]]
     masked = [{"kind": f["kind"], "raw": f["raw"], "context": text[max(0, f["start"] - 60):f["end"] + 40]} for f in hits]
     for f in reversed(hits):
@@ -223,6 +230,63 @@ def mask_ungrounded(text, facts, offer=None, context=""):
         text = text[:f["start"]] + rep + text[f["end"]:]
     return text, masked
 
+
+
+# A percentage keeps the base it has in its source (20 Nov 2026, hosted test: "68.70% of our total raw material costs", where the
+# file says raw materials were "68.70% of revenue from operations"). The value is in the inputs, so mask_ungrounded passes it;
+# this check compares the words after "% of" in the draft with those after the same figure in the facts' source text, and masks
+# the figure when every base the source gives shares no word with the draft's. A figure whose source gives no "% of" base is
+# not checked. It does not check what the percentage is of in other wordings ("accounted for 68.70% of" with another subject).
+RE_PCT_OF = re.compile(r"(?<![\d.])(\d{1,3}(?:\.\d+)?)\s*(?:%|per\s?cent)\s+of\s+([A-Za-z’'\- ]{2,80})")
+PCT_BASE_END = {"in", "for", "during", "as", "on", "at", "by", "and", "which", "while", "over", "compared", "against", "to",
+                "till", "until", "since", "that", "with", "was", "were", "is", "are", "respectively", "fy", "between", "up"}
+PCT_BASE_SKIP = {"our", "the", "its", "their", "total", "company", "companys", "of", "from", "a", "an", "this", "such",
+                 "aggregate", "overall", "all", "net", "gross", "approximately", "about", "average"}
+PCT_SYNONYMS = {"income": "revenue", "turnover": "revenue", "sale": "revenue", "sales": "revenue", "revenues": "revenue",
+                "costs": "cost", "expense": "cost", "expenses": "cost", "expenditure": "cost", "spend": "cost"}
+
+
+def _pct_base(phrase):
+    """Content words of the base after "% of", stemmed: "our total raw material costs on average" -> {raw, material, cost}."""
+    out = set()
+    for w in re.findall(r"[A-Za-z]+", phrase.replace("’", "").replace("'", "")):
+        w = w.lower()
+        if w in PCT_BASE_END:
+            break
+        if w in PCT_BASE_SKIP:
+            continue
+        w = PCT_SYNONYMS.get(w, w)
+        if len(w) > 3 and w.endswith("s") and not w.endswith("ss"):
+            w = w[:-1]
+        out.add(PCT_SYNONYMS.get(w, w))
+        if len(out) >= 6:
+            break
+    return out
+
+
+def mask_misbased_percents(text, facts, context=""):
+    """text with every percentage whose base contradicts its source replaced by [●]; returns (text, masked) like
+    mask_ungrounded, kind "misplaced_base"."""
+    hits = []
+    for m in RE_PCT_OF.finditer(text):
+        k, mine = num_key(m.group(1)), _pct_base(m.group(2))
+        if k is None or not mine:
+            continue
+        bases = []
+        for f in facts:
+            if num_key(f.get("value")) != k:
+                continue
+            for sm in RE_PCT_OF.finditer(str(f.get("snippet") or "")):
+                if num_key(sm.group(1)) == k:
+                    b = _pct_base(sm.group(2))
+                    if b:
+                        bases.append(b)
+        if bases and not any(mine & b for b in bases):
+            hits.append({"kind": "misplaced_base", "raw": m.group(1), "start": m.start(1), "end": m.end(1),
+                         "context": text[max(0, m.start() - 60):m.end() + 20]})
+    for h in reversed(hits):
+        text = text[:h.pop("start")] + PH + text[h.pop("end"):]
+    return text, hits
 
 # An organisation named in model prose that no issuer file mentions is an invention (19 Nov 2026 dry run: "Our Business"
 # listed customers the issuer never had). Names ending in one of these words are checked against the issuer's own text;

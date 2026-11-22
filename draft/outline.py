@@ -65,7 +65,7 @@ SECTIONS = [
       checklist=["source of industry data", "market size", "growth drivers", "competition", "risks to the industry"],
       query="industry market size growth cagr flexible packaging demand drivers peers competition"),
     S("business", "Our Business", "IV. About the Company", "slm_core",
-      needs=["business_note", "operational_data", "insurance_ip"],
+      needs=["business_note", "operational_data", "insurance_ip", "order_book", "work_completion", "process_flow", "material_agreement", "revenue_certificate"],
       checklist=["overview", "products and services", "manufacturing process", "installed capacity and utilisation",
                  "customers and end-use", "raw materials and suppliers", "competitive strengths", "business strategy",
                  "human resources", "properties", "insurance", "intellectual property"],
@@ -77,7 +77,7 @@ SECTIONS = [
     S("regulations", "Key Industry Regulations and Policies", "IV. About the Company", "template",
       query="factories act pollution control gst fire safety"),
     S("history", "History and Certain Corporate Matters", "IV. About the Company", "slm_core",
-      needs=["coi", "moa", "shareholder_resolution"],
+      needs=["coi", "moa", "shareholder_resolution", "shareholder_agreement", "trademark_deed"],
       checklist=["brief history", "change in registered office", "main objects", "amendments to the MoA",
                  "major events and milestones", "holding and subsidiaries", "shareholders' agreements"],
       query="incorporated conversion public company change of name registered office main objects memorandum "

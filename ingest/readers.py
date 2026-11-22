@@ -202,10 +202,18 @@ def _read_docx(path):
     for child in d.element.body.iterchildren():
         tag = child.tag.rsplit("}", 1)[-1]
         if tag == "p":
-            text = Paragraph(child, d).text.strip()
+            par = Paragraph(child, d)
+            text = par.text.strip()
             if text:
                 para_no += 1
-                blocks.append({"page": None, "loc": f"para {para_no}", "kind": "text", "text": text})
+                blk = {"page": None, "loc": f"para {para_no}", "kind": "text", "text": text}
+                style = (par.style.name if par.style is not None else "") or ""
+                m = re.match(r"Heading\s+(\d)$", style)
+                if m:
+                    blk["heading"] = int(m.group(1))        # the author's own outline: sections are cut at these
+                elif style.lower().startswith("toc"):
+                    blk["toc"] = True                       # a contents line ("Overview 2"), not a section
+                blocks.append(blk)
         elif tag == "tbl":
             table_no += 1
             rows = []
@@ -238,16 +246,22 @@ def _fmt_cell(v, number_format=""):
 
 def _read_xlsx(path):
     import openpyxl
+    from extract.rules import HELPER_SHEETS, is_helper_block
     wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
     blocks = []
+    guide = HELPER_SHEETS | ({"index"} if "index" not in os.path.basename(path).lower() else set())
     for ws in wb.worksheets:
+        if ws.title.strip().lower() in guide:             # the workbook's own guide and zero-check sheets are not issuer data
+            continue
         for r_idx, row in enumerate(ws.iter_rows(), start=1):
             cells = [_fmt_cell(getattr(c, "value", None), getattr(c, "number_format", "")) for c in row]
             while cells and not cells[-1]:
                 cells.pop()
             if any(cells):
-                blocks.append({"page": None, "loc": f"{ws.title}!{r_idx}", "kind": "row", "text": " | ".join(cells),
-                               "sheet": ws.title, "row": r_idx})
+                blk = {"page": None, "loc": f"{ws.title}!{r_idx}", "kind": "row", "text": " | ".join(cells),
+                       "sheet": ws.title, "row": r_idx}
+                if not is_helper_block(blk):             # "Check: total assets - total equity and liabilities | 0 | 0"
+                    blocks.append(blk)
     wb.close()
     return None, blocks, [], []
 
