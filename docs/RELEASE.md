@@ -66,3 +66,8 @@ python -m uvicorn serve.app:app --host 127.0.0.1 --port 8765
 
 Drafting model: in Settings, set the model address and name (for example `sme-drhp-7b`). Without a model server, the app
 drafts with the offline drafter.
+
+## v1.2 (22 Nov 2026)
+
+Tag `v1.2` (commit 9312f6e): guard, extraction and drafting fixes from three hosted data-room tests (docs/HOSTING.md, FAILURE_LOG.md items 39 to 41),
+drafting penalty 0.1, unit check, 301 tests. Same adapter as v1.1 (A_qa3_dpo3). Live on the hosted app as `/healthz` commit `9312f6e51133`, guard build `65b3c20d423e`.
