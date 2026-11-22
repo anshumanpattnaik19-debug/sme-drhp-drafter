@@ -1,0 +1,14 @@
+{
+ "run": "A_qa_dpo",
+ "from_adapter": "/storage/tracka/users/learner05/checkpoints/A_qa-51/adapter",
+ "pairs": 223,
+ "steps": 56,
+ "beta": 0.1,
+ "lr": 1e-05,
+ "epochs": 2,
+ "accum": 8,
+ "first_loss": 0.6931471824645996,
+ "last_loss": 0.0002663895769501323,
+ "reward_accuracy": 0.98,
+ "minutes": 23.1
+}

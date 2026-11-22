@@ -1,0 +1,49 @@
+{
+ "run": "seed3",
+ "r": 16,
+ "alpha": 32,
+ "lr": 0.0002,
+ "epochs": 2,
+ "data": "train.jsonl",
+ "seed": 23,
+ "base": "Qwen/Qwen2.5-7B-Instruct",
+ "log": [
+  {
+   "loss": 0.5368059158325196,
+   "grad_norm": 0.536458432674408,
+   "learning_rate": 5.1174083162680465e-06,
+   "epoch": 1.8188105117565698,
+   "step": 165
+  },
+  {
+   "loss": 0.5654556751251221,
+   "grad_norm": 0.42188823223114014,
+   "learning_rate": 2.6802879715596585e-06,
+   "epoch": 1.8741355463347165,
+   "step": 170
+  },
+  {
+   "loss": 0.5428537845611572,
+   "grad_norm": 0.307291179895401,
+   "learning_rate": 1.0178558119067315e-06,
+   "epoch": 1.929460580912863,
+   "step": 175
+  },
+  {
+   "loss": 0.5842619419097901,
+   "grad_norm": 0.7432509064674377,
+   "learning_rate": 1.4334519492711362e-07,
+   "epoch": 1.9847856154910097,
+   "step": 180
+  },
+  {
+   "train_runtime": 4181.7925,
+   "train_samples_per_second": 0.692,
+   "train_steps_per_second": 0.044,
+   "total_flos": 1.596824702451364e+17,
+   "train_loss": 0.6162376089410467,
+   "epoch": 2.0,
+   "step": 182
+  }
+ ]
+}

@@ -65,7 +65,7 @@ not used by default.
 
 ## Known failure modes
 
-1. **Repetition:** the greedy output loops on some drafts (A_qa3_dpo3: 8% of single drafts with the penalty applied; previous adapter 19%; base 1%). Drafts are
+1. **Repetition:** the greedy output loops on some drafts (A_qa3_dpo3: 8% of single drafts with the penalty 0.3; 1.1% at the app's 0.1, which the app trims; previous adapter 19%; base 1%). Drafts are
    cut at a loop and flagged `loop_trimmed`.
 2. **Invented figures in drafts before verification:** 11% of single drafts (previous adapter 33%) contain a figure not in their inputs. The verifier
    masks these as `[●]`; without it the output must not be used.
@@ -88,6 +88,20 @@ a hash-chained audit log with incident escalation, and an evaluation against the
 requests (harmful compliance 62% to 0% on 8 probes, guardrail rows 38% to 100%). Three regressions were found: false
 "instruction ignored" notices in 13% of probe answers (removed by the layer), unequal answers across name-coded identities in
 2 of 9 counterfactual cases (open), and lower figure overlap between the three app drafts. None of this is a certification.
+
+## Behaviour in the app on unseen data rooms (22 Nov 2026)
+
+Three synthetic data rooms of 40 to 45 files each (an EPC contractor, a spice and snacks maker, and Kestrel earlier) were run through the
+hosted app with the shipped adapter, the guard and the rules around it (docs/HOSTING.md, FAILURE_LOG.md items 39 to 41). Each room found faults
+in the system around the model, not in the weights; the last one found a unit error that no figure check caught. Current state:
+
+* All sections draft without a job error; directors, KMP, offer terms, objects and open items agree with the generator's master data.
+* The app decodes drafts with a frequency penalty of 0.1, not 0.3: on the 89 test drafts the shipped adapter used more of its facts (0.714 against
+  0.659) with no invented figure left after the guard at either setting (one run each, no interval) and copies source text more faithfully.
+* The guard now also checks the unit of a rupee amount (lakhs, crore, million) against the inputs.
+* Not covered, and visible to a reviewer: a figure that is in the files but attached to the wrong subject; invented explanations; generic
+  strengths wording; tables the model writes without a period header lose their layout.
+* Not done: a blind review by a practising DRHP reviewer, and a run on files from a real issuer. Treat every draft as a first draft.
 
 ## Limitations
 
