@@ -239,7 +239,7 @@ c.push(B("**Not done or not possible here:** a blind comparison by a practising 
 
 // ---------------------------------------------------------------- 12 reproducibility
 c.push(H1("12  Reproducibility, team and roles"));
-c.push(P("**Repository** (private): `https://github.com/anshumanpattnaik19-debug/sme-drhp-drafter`, tag `v1.1-A_qa3_dpo3`. Data: `python -m data.build units|sample|rows`, `python -m data.qa jobs|rows`; training: `colab/make_notebook.py` (Colab) and `vm/train_qa.py`, `vm/dpo_all.sbatch` (course VM, Slurm); scoring: `python -m evaluate.run`, `evaluate.verified`, `evaluate.claims_mutation`, `evaluate.live_eval`; tracking: `python -m evaluate.mlflow_log`; serving: `python -m serve.pod bundle|start|status`, `python -m serve.warmup`; tests: `python -m pytest tests` (257 pass). Adapters: `18Anshu/sme-drhp-7b-lora-v2` (shipped), `18Anshu/sme-drhp-7b-lora` (rollback), `18Anshu/sme-drhp-7b-awq` (AWQ). The records behind this report are `RETRAINING_LOG.md`, `FAILURE_LOG.md` (39 items), `TRAINING.md`, `docs/MODEL_CARD.md`, `docs/RED_TEAM_LOG.md`, `docs/RAG_DECISIONS.md`, `docs/H5_RESULTS.md`, `docs/HOSTING.md` and `RESPONSIBLE_AI.md`."));
+c.push(P("**Repository** (private): `https://github.com/anshumanpattnaik19-debug/sme-drhp-drafter`, tag `v1.2` (adapter A_qa3_dpo3). Data: `python -m data.build units|sample|rows`, `python -m data.qa jobs|rows`; training: `colab/make_notebook.py` (Colab) and `vm/train_qa.py`, `vm/dpo_all.sbatch` (course VM, Slurm); scoring: `python -m evaluate.run`, `evaluate.verified`, `evaluate.claims_mutation`, `evaluate.live_eval`; tracking: `python -m evaluate.mlflow_log`; serving: `python -m serve.pod bundle|start|status`, `python -m serve.warmup`; tests: `python -m pytest tests` (257 pass). Adapters: `18Anshu/sme-drhp-7b-lora-v2` (shipped), `18Anshu/sme-drhp-7b-lora` (rollback), `18Anshu/sme-drhp-7b-awq` (AWQ). The records behind this report are `RETRAINING_LOG.md`, `FAILURE_LOG.md` (39 items), `TRAINING.md`, `docs/MODEL_CARD.md`, `docs/RED_TEAM_LOG.md`, `docs/RAG_DECISIONS.md`, `docs/H5_RESULTS.md`, `docs/HOSTING.md` and `RESPONSIBLE_AI.md`."));
 c.push(...table([2400, 3600, 3638], ["role (Track A)", "responsibility", "member and training job"], [
   ["Data and synthetic generation", "corpus, teacher extraction, gates, splits", "[name]"],
   ["Fine-tuning and tracking", "QLoRA runs, sweeps, MLflow", "[name]: seed 2, seed 3, ablation 1 (Colab, 11 to 12 Nov)"],
@@ -250,7 +250,7 @@ c.push(...table([2400, 3600, 3638], ["role (Track A)", "responsibility", "member
 ], "Table 8. Roles: the member names and each member's own training job are to be filled in by the team."));
 
 c.push(...table([2600, 7038], ["Track A deliverable", "where it is"], [
-  ["Git repository, reproducible training and serving code", "private GitHub repository above, tag `v1.1-A_qa3_dpo3`; every stage has an offline test and a mock model server"],
+  ["Git repository, reproducible training and serving code", "private GitHub repository above, tag `v1.2` (adapter A_qa3_dpo3); every stage has an offline test and a mock model server"],
   ["Experiment tracking dashboard", "MLflow store `mlflow/mlflow.db` (16 runs; section 8) and the static `docs/experiment_dashboard.html`"],
   ["Model card (use, provenance, failure modes, refusals)", "`docs/MODEL_CARD.md`; red-team log of 20 prompts `docs/RED_TEAM_LOG.md`; `RESPONSIBLE_AI.md`, `docs/RAI_EVAL_REPORT.md`"],
   ["12-page technical report", "this document: `docs/TECHNICAL_REPORT.docx`"],
