@@ -321,3 +321,26 @@ def test_a_unit_the_inputs_give_is_kept():
     facts = _facts_in_lakhs()
     for t in ("Revenue was ₹ 101.00 lakhs in FY 2025-26.", "E-commerce sold ₹484.34 million through platforms.", "A figure nobody holds: ₹ 99,999 crore."):
         assert mask_unit_claims(t, facts)[1] == []
+
+
+def test_templated_run_is_cut():
+    """A model draft whose lines all open with the same six words (47 'The industry is also responding to ...' paragraphs) is cut."""
+    from draft.writer import cut_templated_run
+    head = "The industry is fragmented, with a few national brands and a long tail of regional players."
+    body = "\n\n".join(f"The industry is also responding to topic{i} pressures by doing thing {i}." for i in range(12))
+    out, cut = cut_templated_run(head + "\n\n" + body)
+    assert cut and out.count("also responding") == 2 and out.startswith(head)
+
+
+def test_templated_run_keeps_openings_the_inputs_use():
+    from draft.writer import cut_templated_run
+    lines = "\n\n".join(f"The Company has entered into an agreement with party{i} for supply of goods." for i in range(8))
+    assert cut_templated_run(lines, "The Company has entered into an agreement with")[1] is False
+    assert cut_templated_run("short one.\n\nAnother line here.")[1] is False
+
+
+def test_templated_run_is_counted_as_a_loop():
+    from draft.writer import guard_draft
+    raw = "\n\n".join(f"The industry is also responding to topic{i} pressures by doing thing {i}." for i in range(12))
+    blocks, _, looped, _ = guard_draft(raw, "Industry", [], {}, "Rasoiyana Foods Limited", "")
+    assert looped and len([b for b in blocks if b["type"] == "paragraph"]) <= 2

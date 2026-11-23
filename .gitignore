@@ -29,3 +29,4 @@ bundles/_upload/
 
 # RunPod and Hugging Face keys for serve/runpod.py (never commit)
 .runpod.env
+docs/report/out/

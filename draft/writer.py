@@ -621,6 +621,43 @@ def collapse_runs(text, keep=3):
 
 
 
+TEMPLATE_PREFIX_WORDS, TEMPLATE_RUN, TEMPLATE_KEEP = 6, 5, 2
+
+
+def cut_templated_run(text, source=""):
+    """(text, was_cut): cut a draft where line after line opens with the same six words and goes on to say something else each time
+    ("The industry is also responding to ... pressures by ...", 47 times: a 2,385-word Industry Overview, 23 Nov 2026), which
+    trim_repeats cannot see because no two lines are equal. The first two lines of the run are kept. An opening that the inputs
+    themselves use is left alone, so a list of agreements ("The Company has entered into an agreement with ...") is not cut."""
+    source = re.sub(r"\s+", " ", source.lower())
+    lines = text.split("\n")
+    last, run, start = None, 0, 0
+    for i, ln in enumerate(lines):
+        if not ln.strip():
+            continue                                   # blank lines between paragraphs do not end a run
+        words = ln.split()
+        key = None if ln.lstrip().startswith("|") or len(words) <= TEMPLATE_PREFIX_WORDS else " ".join(words[:TEMPLATE_PREFIX_WORDS]).lower()
+        if key and key == last:
+            run += 1
+        else:
+            last, run, start = key, (1 if key else 0), i
+        if run >= TEMPLATE_RUN and key not in source:
+            return _keep_lines(lines, start, TEMPLATE_KEEP), True
+    return text, False
+
+
+def _keep_lines(lines, start, keep):
+    """The lines before index start, then the next keep non-empty lines (and the blank lines between them)."""
+    kept, n = list(lines[:start]), 0
+    for ln in lines[start:]:
+        if ln.strip():
+            if n == keep:
+                break
+            n += 1
+        kept.append(ln)
+    return "\n".join(kept).rstrip()
+
+
 # A draft can also degenerate without repeating a sentence, which trim_repeats and collapse_runs look for (20 Nov 2026, hosted
 # test: a list of risks ran on for some 300 words, with words split by spaces, "t o write-off s", "civil commotion s"). The text
 # is cut before the first sentence that has three or more split words, or that runs past 120 words with ten or more semicolons.
@@ -741,7 +778,8 @@ def guard_draft(text, s, facts, offer, company, corpus):
     text, looped_short = collapse_runs(text)
     source = " ".join(f"{f.get('label', '')} {f.get('value', '')} {f.get('snippet', '')}" for f in facts)
     text, degenerate = cut_degenerate(text, source)
-    looped = looped or looped_short or degenerate
+    text, templated = cut_templated_run(text, source)
+    looped = looped or looped_short or degenerate or templated
     context = f"{company} {s}"
     blocks = clean_fragments([blk for blk in parse_markdown(text) if blk["type"] != "heading"])
     n = 0
