@@ -69,5 +69,18 @@ drafts with the offline drafter.
 
 ## v1.2 (22 Nov 2026)
 
-Tag `v1.2` (commit 9312f6e): guard, extraction and drafting fixes from three hosted data-room tests (docs/HOSTING.md, FAILURE_LOG.md items 39 to 41),
+Tag `v1.2` (commit 077256d): guard, extraction and drafting fixes from three hosted data-room tests (docs/HOSTING.md, FAILURE_LOG.md items 39 to 41),
 drafting penalty 0.1, unit check, 301 tests. Same adapter as v1.1 (A_qa3_dpo3). Live on the hosted app as `/healthz` commit `9312f6e51133`, guard build `65b3c20d423e`.
+
+## Commit hashes (23 Nov 2026)
+
+Commit messages were rewritten on 23 Nov 2026 to remove attribution lines, so every commit hash changed; the files in each commit did not
+(tree hashes are identical before and after). Tags `v1.1-A_qa3_dpo3` and `v1.2` were moved to the matching new commits.
+
+| Tag | Hash before | Hash now |
+|---|---|---|
+| `v1.1-A_qa3_dpo3` | f066c0f | 1826f6d |
+| `v1.2` | 9312f6e | 077256d |
+
+Older records in this repository (HOSTING.md, DOCKER_TEST.md, the MLflow database) quote the earlier hashes, because that is what the hosted
+app and the container printed at the time. The hosted app's `/healthz` still shows `9312f6e51133`, which is `v1.2` under its old hash.
