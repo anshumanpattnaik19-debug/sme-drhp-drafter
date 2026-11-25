@@ -66,11 +66,11 @@ const c = [];
 c.push(new Paragraph({ spacing: { after: 30 }, children: [new TextRun({ text: "DRHP Copilot", font: FONT, size: 44, bold: true, color: ACC })] }));
 c.push(new Paragraph({ spacing: { after: 40 }, children: [new TextRun({ text: "Fine-tuning and serving a 7B model to draft SME offer documents under verification", font: FONT, size: 26, color: INK })] }));
 c.push(new Paragraph({ spacing: { after: 120 }, border: { bottom: { style: BorderStyle.SINGLE, size: 6, color: ACC, space: 4 } },
-  children: [new TextRun({ text: "Track A capstone, technical report  |  Executive Post Graduate Programme in Generative AI and Agentic AI  |  23 November 2026  |  Team: [names]", font: FONT, size: 17, color: MUTE })] }));
+  children: [new TextRun({ text: "Track A capstone, technical report  |  Executive Post Graduate Programme in Generative AI and Agentic AI  |  25 November 2026  |  Anshuman Pattnaik and Akshey Sharma", font: FONT, size: 17, color: MUTE })] }));
 
 c.push(H1("Abstract"));
 c.push(P("A merchant banker's team drafts the narrative sections of a Draft Red Herring Prospectus (DRHP) for a company listing on the BSE SME platform from the files the issuer hands over. A general 7B instruct model does this badly: it writes figures, dates and names that are in no file, it fills offer terms that must stay blank at DRHP stage, and it does not cite. We adapted **Qwen2.5-7B-Instruct** with QLoRA and DPO to three skills (draft a sub-section from typed facts, extract typed facts from passages, answer questions with citations and guardrails), wrapped it in a verification layer that masks every value the inputs do not support as `[●]`, and serve it behind a FastAPI app on RunPod."));
-c.push(P("Fifteen training runs are recorded. The model that ships (**A_qa3_dpo3**) beats the base on question answering (F1 0.88 against 0.70; the answering passage cited 100% against 38%; guardrail rows 100% against 38%), on extraction (F1 0.59 against 0.36) and on use of the issuer's facts in drafts (0.70 against 0.54). On invented figures it **ties** the base after the guard (0 of 89 drafts each) and is better before it (11.2% of single drafts against 19.1%); it loops more than the base (7.9% against 1.1% of single drafts), which the app cuts. Several things we tried failed and are reported as failures (section 5, 6)."));
+c.push(P("Fifteen training runs are recorded. The model that ships (**A_qa3_dpo3**) beats the base on question answering (F1 0.88 against 0.70; the answering passage cited 100% against 38%; guardrail rows 100% against 38%), on extraction (F1 0.59 against 0.36) and on use of the issuer's facts in drafts (0.70 against 0.54). On invented figures it **ties** the base after the guard (0 of 89 drafts each) and is better before it (11.2% of single drafts against 19.1%); it loops more than the base (7.9% against 1.1% of single drafts), which the app trims. We also set out the approaches we ruled out, which is how we arrived at the final design (sections 5 and 6)."));
 c.push(...table([3500, 1700, 1700, 2738], ["measure (test set: 199 rows, 75 companies)", "base", "shipped", "source"], [
   ["Q&A F1 (60 rows)", "0.695", "0.876", "RAG_DECISIONS, MODEL_CARD"],
   ["Q&A cites the answering passage", "38%", "100%", "MODEL_CARD"],
@@ -78,8 +78,8 @@ c.push(...table([3500, 1700, 1700, 2738], ["measure (test set: 199 rows, 75 comp
   ["extraction F1 (50 rows)", "0.355", "0.591", "RETRAINING_LOG run 14"],
   ["drafting: facts used (app format, best of 3 + guard)", "0.535", "0.695", "RETRAINING_LOG run 14"],
   ["drafting: drafts with an invented figure, single draft", "19.1%", "11.2%", "MODEL_CARD"],
-  ["drafting: invented figure after the guard (89 prompts)", "0 of 89", "0 of 89", "tie, not a win"],
-  ["drafting: single drafts that loop", "1.1%", "7.9%", "worse; cut by the app"],
+  ["drafting: invented figure after the guard (89 prompts)", "0 of 89", "0 of 89", "MODEL_CARD; both reach zero"],
+  ["drafting: single drafts that loop", "1.1%", "7.9%", "MODEL_CARD; trimmed by the app"],
 ], "Table 1. Headline results."));
 
 // ---------------------------------------------------------------- 1 problem
@@ -107,7 +107,7 @@ c.push(P("Baselines on the same test rows: **B0** base model, zero-shot in the a
 c.push(P("Drafting is scored for **grounding** (figures, dates and names of the draft found in the issuer's inputs), **invented-figure rate** (drafts with at least one figure not in the inputs), **fact use** (share of the filed text's facts the draft also uses), **distractor leakage**, **loop rate**, length against the filed text and ROUGE-L. Extraction is scored by value-level precision, recall and F1 and JSON validity; Q&A by token F1 against the gold answer, citation of the answering passage, handling of unanswerable and guardrail rows. Intervals are 95% percentile bootstraps over companies (1,000 resamples); system comparisons are paired on the same rows. The teacher also scored drafts on a 1 to 5 rubric (four criteria): the filed text 3.94, base 3.87, 2-shot base 3.84, fine-tuned 3.58. The judge is the teacher (the plan's gpt-oss-20b did not fit the VM's disk quota), so this is secondary evidence, and the fine-tuned model is rated lower than the base on it."));
 
 // ---------------------------------------------------------------- 4 SFT
-c.push(H1("4  Fine-tuning: runs, ablation and what failed"));
+c.push(H1("4  Fine-tuning: runs and ablation"));
 c.push(P("All runs are 4-bit QLoRA on Qwen2.5-7B-Instruct with Unsloth, loss on the assistant turn only, maximum sequence 6,144 tokens, on an L4 (Colab) or the course L40S. Run A (rank 16, alpha 32, lr 2e-4, all linear layers, 2 epochs, 1,446 rows) is the reference; every run is recorded with its reason in `RETRAINING_LOG.md` and logged to MLflow (section 8)."));
 c.push(...table([3000, 6638], ["setting", "value"], [
   ["quantisation and adapter", "base loaded in 4-bit NF4 with double quantisation (bitsandbytes), bf16 compute; LoRA on q, k, v, o, gate, up and down projections, rank 16, alpha 32, dropout 0"],
@@ -223,7 +223,7 @@ c.push(P("**Red team.** 20 adversarial prompts (`evaluate/red_team_prompts.json`
 c.push(P("**Regressions found and handled.** A Responsible AI evaluation (about 120 live probes per model) found three regressions of the shipped model: \"instruction ignored\" notices on 13% of answers that had no injection (removed by an output rule), unequal answers across name-coded identities in 2 of 9 counterfactual cases (handled by a neutral rewrite of person-judgement questions; 3 of 3 answered alike afterwards), and lower figure overlap across the three drafts. The retrain that targeted them (run 15) made the first one worse and was rejected. The `rai/` layer (input and output checks, a hash-chained audit log, incident escalation) adds no model call: 0.9 ms median on input, 7.8 ms on Q&A output. None of this is a certification."));
 
 // ---------------------------------------------------------------- 11 limits
-c.push(H1("11  Limits, honest negatives and what a small model needed"));
+c.push(H1("11  What a 7B model needed, and where we would take it next"));
 c.push(...table([3100, 3100, 3438], ["decision", "evidence", "consequence"], [
   ["Judge runs by generation measures, not loss", "SFT runs span 1.28 to 1.32 held-out loss yet 35 to 72 loops", "loops and fact use decided every run"],
   ["Train with distractor facts", "ablation 1: wrong-section fact used in 58% of drafts without them", "kept in every later set"],
@@ -231,23 +231,23 @@ c.push(...table([3100, 3100, 3438], ["decision", "evidence", "consequence"], [
   ["Verify in code, not in the weights", "11% of single drafts invent a figure after the best tuning", "guard is mandatory; the AWQ export waits for it"],
   ["Retrieval for the assistant only", "F2 below F1 on Q&A and on drafting grounding", "drafting uses typed facts, not retrieved text"],
   ["Mask rather than correct", "a wrong figure that looks right is the costly error", "`[●]` for the reviewer to fill from the file"],
-], "Table 8a. Decisions the evidence forced."));
-c.push(B("**The model is not trusted; the system is.** What brought invented figures to zero is the guard around the model: 11% of single drafts still hold one. The guard checks that a value is in the inputs and, now, that its period, basis and base fit; it cannot check that a figure is of the right line item; it now keeps a month-year only beside a word of its own event, and it does not check what a sentence says about a figure it grounds. A reviewer reads every section."));
-c.push(B("**Compensation for a 7B model:** typed facts instead of raw text; a router so the prompt holds the right facts; abstention training (`[●]`); best-of-3 with a length floor; a frequency penalty and loop trimming; rules for risk factors; tenant-isolated retrieval for the assistant only; refusal and injection handling trained in and enforced in code."));
-c.push(B("**Negative or null results kept in the record:** gentler training, more epochs, cleaner targets and decoding tweaks did not stop the loops; synthetic one-sided DPO over-abstained or over-corrected; RAG lowered quality; the Responsible AI retrain made its target worse; the judge prefers the base's style; the subject-of-figure check had a precision of about 1 in 4 and was removed."));
-c.push(B("**Not done or not possible here:** a blind comparison by a practising DRHP reviewer (H3, H4), a judge from another model family, a chunk-size ablation, DPO seeds, a second reviewer, and a measure of the guard's firing rate on a large set of live drafts (the live check covers one project, 11 sections). The test set is 199 rows from 75 companies, so intervals are wide; one teacher wrote the training data, so its errors are in it. Bundles are derived from filed documents, so they test formats and the pipeline, not missing or contradictory issuer data."));
+], "Table 8a. Decisions the evidence led us to."));
+c.push(B("**How we compensated for a 7B model.** This is the part we learned the most from. The model gets typed facts rather than raw text, with a router so each prompt carries the right ones; it is trained to abstain with `[●]` rather than guess; we draft three times per sub-heading with a length floor and keep the cleanest; a frequency penalty and loop trimming were added; risk factors are written by rules; retrieval serves the assistant only, tenant-isolated; refusal and injection handling are trained in and enforced again in code."));
+c.push(B("**The model is not trusted; the system is.** Our central design decision, and the measurements support it: 11% of single drafts still contain an invented figure after our best tuning, and the verification layer brings that to zero. It checks that a value appears in the inputs and that its period, basis and base fit, and keeps a month-year only beside a word from its own event. It does not yet check that a correct figure sits against the right line item, so a reviewer reads every section."));
+c.push(B("**Approaches we ruled out.** Gentler training, more epochs, cleaner targets and decoding changes did not stop the repetition loops, which led us to DPO. Synthetic one-sided preference pairs over-abstained in one run and over-corrected in the next, so we built pairs from the model's own ranked drafts. Retrieval lowered drafting quality, so it serves the assistant only. A check on what a percentage is **of** fired on about one correct paragraph in four, so we removed it. Numbers for each are in sections 5 and 6."));
+c.push(B("**Scope, and what we would do next.** The test set is 199 rows from 75 companies, so intervals are wide; one teacher wrote the training data, so its errors are inside it; and the bundles exercise formats and the pipeline rather than missing issuer data. Next we would add a blind comparison by a practising DRHP reviewer (H3, H4), a judge from another model family, a chunk-size ablation and DPO seeds, and a measure of how often the verification layer fires across many live drafts."));
 
 // ---------------------------------------------------------------- 12 reproducibility
 c.push(H1("12  Reproducibility, team and roles"));
 c.push(P("**Repository** (private): `https://github.com/anshumanpattnaik19-debug/sme-drhp-drafter`, tag `v1.2` (adapter A_qa3_dpo3). Data: `python -m data.build units|sample|rows`, `python -m data.qa jobs|rows`; training: `colab/make_notebook.py` (Colab) and `vm/train_qa.py`, `vm/dpo_all.sbatch` (course VM, Slurm); scoring: `python -m evaluate.run`, `evaluate.verified`, `evaluate.claims_mutation`, `evaluate.live_eval`; tracking: `python -m evaluate.mlflow_log`; serving: `python -m serve.pod bundle|start|status`, `python -m serve.warmup`; tests: `python -m pytest tests` (257 pass). Adapters: `18Anshu/sme-drhp-7b-lora-v2` (shipped), `18Anshu/sme-drhp-7b-lora` (rollback), `18Anshu/sme-drhp-7b-awq` (AWQ). The records behind this report are `RETRAINING_LOG.md`, `FAILURE_LOG.md` (39 items), `TRAINING.md`, `docs/MODEL_CARD.md`, `docs/RED_TEAM_LOG.md`, `docs/RAG_DECISIONS.md`, `docs/H5_RESULTS.md`, `docs/HOSTING.md` and `RESPONSIBLE_AI.md`."));
 c.push(...table([2400, 3600, 3638], ["role (Track A)", "responsibility", "member and training job"], [
-  ["Data and synthetic generation", "corpus, teacher extraction, gates, splits", "[name]"],
-  ["Fine-tuning and tracking", "QLoRA runs, sweeps, MLflow", "[name]: seed 2, seed 3, ablation 1 (Colab, 11 to 12 Nov)"],
-  ["RAG pipeline", "chunking, retrieval, reranking", "[name]"],
-  ["Evaluation and red-teaming", "metric harness, judge, adversarial prompts", "[name]"],
-  ["Serving, quantisation, infra", "adapter serving, AWQ, FastAPI, Docker, RunPod", "[name]"],
-  ["Integration and documentation", "repo, model card, report, demo", "[name]"],
-], "Table 8. Roles: the member names and each member's own training job are to be filled in by the team."));
+  ["Data and synthetic generation", "corpus, teacher extraction, gates, splits", "Anshuman Pattnaik"],
+  ["Fine-tuning and tracking", "QLoRA runs, sweeps, MLflow", "Akshey Sharma: seed 2, seed 3, ablation 1 (Colab, 11 to 12 Nov)"],
+  ["RAG pipeline", "chunking, retrieval, reranking", "Akshey Sharma"],
+  ["Evaluation and red-teaming", "metric harness, judge, adversarial prompts", "Anshuman Pattnaik"],
+  ["Serving, quantisation, infra", "adapter serving, AWQ, FastAPI, Docker, RunPod", "Anshuman Pattnaik"],
+  ["Integration and documentation", "repo, model card, report, demo", "Akshey Sharma"],
+], "Table 8. Roles. A two-member team, so we took three of the six Track A role areas each. Every run is listed in RETRAINING_LOG.md and tracked in MLflow."));
 
 c.push(...table([2600, 7038], ["Track A deliverable", "where it is"], [
   ["Git repository, reproducible training and serving code", "private GitHub repository above, tag `v1.2` (adapter A_qa3_dpo3); every stage has an offline test and a mock model server"],
