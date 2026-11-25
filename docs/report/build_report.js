@@ -258,7 +258,7 @@ c.push(...table([2600, 7038], ["Track A deliverable", "where it is"], [
 ], "Table 9. Where each deliverable is."));
 
 c.push(H1("13  The 10-minute demo"));
-c.push(P("The demo runs on the deployed endpoint, not on slides: launcher, upload, draft, guard, assistant, results. The full run sheet, the pre-flight commands (the model needs 4 to 6 minutes to wake) and the fallback if it is still cold are in `docs/DEMO_SCRIPT.md`; a the recorded walkthrough from 23 Nov (7 min 48 s, the current adapter) is the backup."));
+c.push(P("The demo runs on the deployed endpoint, not on slides: launcher, upload, draft, guard, assistant, results. The full run sheet, the pre-flight commands (the model needs 4 to 6 minutes to wake) and the fallback if it is still cold are in `docs/DEMO_SCRIPT.md`; a the recorded walkthrough from 25 Nov (10 min 55 s, the current adapter) is the backup."));
 c.push(...table([1300, 4300, 4038], ["time", "on screen", "point made"], [
   ["0:00 to 0:45", "launcher page, then the app", "the task, and why a plain 7B model is not enough"],
   ["0:45 to 2:15", "upload six issuer files; facts view with sources", "Word, Excel and a scan become about 740 typed facts, each with its source"],
