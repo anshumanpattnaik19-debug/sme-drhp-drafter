@@ -16,8 +16,8 @@ step is the model's cold start.
 | 6 | keep `docs/MODEL_CARD.md`, `docs/RED_TEAM_LOG.md` and `docs/TECHNICAL_REPORT.docx` open in tabs | |
 
 **If the endpoint is still cold when you begin:** talk through slide-free minutes 0 to 1:30 (below), and use the recorded
-walkthrough `demo/DRHP_Copilot_demo.mp4` for the drafting step. That video was recorded on 25 Nov (10 min 55 s, adapter A_qa3_dpo3, a synthetic issuer). It is storyboarded in
-five acts (problem, approach, system, evidence, limits); `demo/STORYBOARD.md` has the scene list. Earlier
+walkthrough `demo/DRHP_Copilot_demo.mp4` for the drafting step. That video was recorded on 26 Nov (10 min 23 s, adapter A_qa3_dpo3, a synthetic issuer). It is storyboarded in
+five acts (problem, approach, system, evidence, hosting and close); `demo/STORYBOARD.md` has the scene list. Earlier
 recordings are kept as `demo/DRHP_Copilot_demo_19Nov.mp4` and the 23 Nov cut. Never wait in silence on a cold model.
 
 ## Run of show
